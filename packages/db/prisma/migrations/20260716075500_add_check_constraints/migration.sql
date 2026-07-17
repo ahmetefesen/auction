@@ -1,0 +1,10 @@
+-- PostgreSQL CHECK constraints (not expressible in Prisma schema syntax)
+ALTER TABLE "Wallet" ADD CONSTRAINT "wallet_available_balance_non_negative" CHECK ("availableBalance" >= 0);
+ALTER TABLE "Wallet" ADD CONSTRAINT "wallet_held_balance_non_negative" CHECK ("heldBalance" >= 0);
+ALTER TABLE "WalletTransaction" ADD CONSTRAINT "wallet_tx_amount_positive" CHECK ("amount" > 0);
+ALTER TABLE "Auction" ADD CONSTRAINT "auction_starting_price_positive" CHECK ("startingPrice" > 0);
+ALTER TABLE "Auction" ADD CONSTRAINT "auction_min_increment_positive" CHECK ("minIncrement" > 0);
+ALTER TABLE "Auction" ADD CONSTRAINT "auction_current_bid_non_negative" CHECK ("currentBid" >= 0);
+ALTER TABLE "Auction" ADD CONSTRAINT "auction_ends_after_starts" CHECK ("endsAt" > "startsAt");
+ALTER TABLE "Bid" ADD CONSTRAINT "bid_amount_positive" CHECK ("amount" > 0);
+ALTER TABLE "ProxyBid" ADD CONSTRAINT "proxy_bid_max_positive" CHECK ("maxAmount" > 0);

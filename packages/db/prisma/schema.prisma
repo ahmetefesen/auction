@@ -1,0 +1,231 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SELLER
+  BUYER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AuctionStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+  SETTLED
+}
+
+enum WalletTxType {
+  DEPOSIT
+  HOLD
+  RELEASE
+  CAPTURE
+  REFUND
+  WITHDRAW
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique @db.VarChar(255)
+  /// Argon2id hash — never store plaintext passwords
+  passwordHash String     @db.VarChar(255)
+  displayName  String     @db.VarChar(100)
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
+
+  wallet        Wallet?
+  auctions      Auction[]      @relation("SellerAuctions")
+  bids          Bid[]
+  proxyBids     ProxyBid[]
+  wonAuctions   Auction[]      @relation("AuctionWinner")
+  watchlist     Watchlist[]
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+
+  @@index([role, status])
+}
+
+/// Auth infrastructure — JWT refresh rotation
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(255)
+  expiresAt DateTime  @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Wallet {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @db.Uuid
+  /// Integer minor units (cents/kuruş) — never float
+  availableBalance Int      @default(0)
+  heldBalance      Int      @default(0)
+  /// Optimistic concurrency guard for balance mutations
+  version          Int      @default(0)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+}
+
+/// Immutable ledger — application must never update/delete rows
+model WalletTransaction {
+  id             String       @id @default(uuid()) @db.Uuid
+  walletId       String       @db.Uuid
+  type           WalletTxType
+  amount         Int
+  /// Snapshot after mutation (ledger integrity)
+  balanceAfter   Int
+  heldAfter      Int
+  referenceType  String?      @db.VarChar(64)
+  referenceId    String?      @db.Uuid
+  idempotencyKey String?      @unique @db.VarChar(128)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@index([referenceId])
+}
+
+model Auction {
+  id                 String        @id @default(uuid()) @db.Uuid
+  sellerId           String        @db.Uuid
+  title              String        @db.VarChar(200)
+  description        String        @db.Text
+  status             AuctionStatus @default(DRAFT)
+  startingPrice      Int
+  reservePrice       Int?
+  buyNowPrice        Int?
+  minIncrement       Int
+  currentBid         Int           @default(0)
+  currentWinnerId    String?       @db.Uuid
+  startsAt           DateTime      @db.Timestamptz(3)
+  endsAt             DateTime      @db.Timestamptz(3)
+  antiSnipeWindowSec Int           @default(30)
+  antiSnipeExtendSec Int           @default(60)
+  version            Int           @default(0)
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+
+  seller        User           @relation("SellerAuctions", fields: [sellerId], references: [id])
+  currentWinner User?          @relation("AuctionWinner", fields: [currentWinnerId], references: [id])
+  images        AuctionImage[]
+  bids          Bid[]
+  proxyBids     ProxyBid[]
+  watchlist     Watchlist[]
+
+  @@index([status, endsAt])
+  @@index([sellerId])
+  @@index([endsAt])
+}
+
+model AuctionImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  auctionId  String   @db.Uuid
+  url        String   @db.VarChar(512)
+  storageKey String   @db.VarChar(255)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId])
+}
+
+/// Append-only bid history — application must never update/delete rows
+model Bid {
+  id        String   @id @default(uuid()) @db.Uuid
+  auctionId String   @db.Uuid
+  bidderId  String   @db.Uuid
+  amount    Int
+  isProxy   Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidder  User    @relation(fields: [bidderId], references: [id])
+
+  @@index([auctionId, createdAt])
+  @@index([bidderId])
+}
+
+model ProxyBid {
+  id        String   @id @default(uuid()) @db.Uuid
+  auctionId String   @db.Uuid
+  bidderId  String   @db.Uuid
+  maxAmount Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidder  User    @relation(fields: [bidderId], references: [id])
+
+  @@unique([auctionId, bidderId])
+  @@index([auctionId])
+}
+
+model Watchlist {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  auctionId String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, auctionId])
+}
+
+/// Append-only audit trail — application must never update/delete rows
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  action     String   @db.VarChar(128)
+  entityType String   @db.VarChar(64)
+  entityId   String?  @db.Uuid
+  before     Json?
+  after      Json?
+  ip         String?  @db.VarChar(45)
+  userAgent  String?  @db.VarChar(512)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
+
+/// Bid POST Idempotency-Key tracking
+model BidIdempotency {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @db.VarChar(128)
+  userId    String   @db.Uuid
+  auctionId String   @db.Uuid
+  bidId     String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([key, userId])
+  @@index([createdAt])
+}
