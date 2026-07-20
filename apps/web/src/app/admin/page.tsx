@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import type { AdminMetricsDto } from "@auction/shared";
 import { apiFetch } from "@/lib/api";
 import { formatTry } from "@/lib/format";
 
@@ -33,15 +34,49 @@ type UserItem = {
   status: string;
 };
 
+const METRICS_POLL_MS = 8_000;
+
+function HealthCard({
+  label,
+  value,
+  hint,
+  warn,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  warn?: boolean;
+}) {
+  return (
+    <div className="border border-white/10 bg-ink-900/60 px-4 py-3">
+      <p className="text-xs uppercase tracking-wide text-mist-300">{label}</p>
+      <p className={`mt-1 font-mono text-2xl tabular-nums ${warn ? "text-red-300" : "text-mist-50"}`}>
+        {value}
+      </p>
+      {hint ? <p className="mt-1 text-xs text-mist-300">{hint}</p> : null}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [logs, setLogs] = useState<AuditItem[]>([]);
   const [live, setLive] = useState<LiveAuction[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [metrics, setMetrics] = useState<AdminMetricsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [filters, setFilters] = useState({ action: "", entityType: "", actorId: "" });
   const [forceReason, setForceReason] = useState("");
   const [forceTarget, setForceTarget] = useState<LiveAuction | null>(null);
+
+  const loadMetrics = useCallback(async (): Promise<void> => {
+    try {
+      const data = await apiFetch<AdminMetricsDto>("/admin/metrics");
+      setMetrics(data);
+    } catch {
+      // keep last snapshot; panel error handled by main load
+    }
+  }, []);
 
   function load(): void {
     startTransition(async () => {
@@ -50,14 +85,16 @@ export default function AdminPage() {
         if (filters.action) params.set("action", filters.action);
         if (filters.entityType) params.set("entityType", filters.entityType);
         if (filters.actorId) params.set("actorId", filters.actorId);
-        const [audit, userRes, liveRes] = await Promise.all([
+        const [audit, userRes, liveRes, metricsRes] = await Promise.all([
           apiFetch<{ items: AuditItem[] }>(`/admin/audit-logs?${params.toString()}`),
           apiFetch<{ users: UserItem[] }>("/admin/users"),
           apiFetch<{ items: LiveAuction[] }>("/admin/auctions/live"),
+          apiFetch<AdminMetricsDto>("/admin/metrics"),
         ]);
         setLogs(audit.items);
         setUsers(userRes.users);
         setLive(liveRes.items);
+        setMetrics(metricsRes);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Admin access required");
@@ -68,6 +105,13 @@ export default function AdminPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadMetrics();
+    }, METRICS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [loadMetrics]);
 
   function toggleStatus(user: UserItem): void {
     startTransition(async () => {
@@ -106,11 +150,64 @@ export default function AdminPage() {
     });
   }
 
+  const emailFailed = metrics?.queues.email?.failed ?? 0;
+  const closerFailed = metrics?.queues.auctionCloser?.failed ?? 0;
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
       <h1 className="font-display text-4xl text-mist-50">Admin</h1>
       <p className="mt-2 text-mist-300">Live ops, emergency controls, and audit trail.</p>
       {error ? <p className="mt-4 text-red-300">{error}</p> : null}
+
+      <h2 className="mt-10 text-lg text-brass-400">System health</h2>
+      <p className="mt-1 text-xs text-mist-300">Auto-refreshes every {METRICS_POLL_MS / 1000}s</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <HealthCard
+          label="Active sockets"
+          value={metrics?.sockets.active == null ? "—" : String(metrics.sockets.active)}
+          hint={metrics?.sockets.active == null ? "Socket.IO not attached" : undefined}
+        />
+        <HealthCard
+          label="Redis latency"
+          value={
+            metrics?.redis.latencyMs == null ? "down" : `${metrics.redis.latencyMs} ms`
+          }
+          warn={metrics ? !metrics.redis.ok : false}
+        />
+        <HealthCard
+          label="Postgres latency"
+          value={
+            metrics?.postgres.latencyMs == null ? "down" : `${metrics.postgres.latencyMs} ms`
+          }
+          warn={metrics ? !metrics.postgres.ok : false}
+        />
+        <HealthCard
+          label="Held balance"
+          value={metrics ? formatTry(metrics.wallet.totalHeldBalance) : "—"}
+          hint={
+            metrics
+              ? `Available ${formatTry(metrics.wallet.totalAvailableBalance)}`
+              : undefined
+          }
+        />
+        <HealthCard
+          label="Live auctions"
+          value={metrics ? String(metrics.auctions.liveCount) : "—"}
+          hint={
+            metrics ? `${metrics.auctions.endingSoonCount} ending within 15m` : undefined
+          }
+        />
+        <HealthCard
+          label="Queue failures"
+          value={metrics ? String(emailFailed + closerFailed) : "—"}
+          hint={
+            metrics
+              ? `email ${emailFailed} · closer ${closerFailed}`
+              : undefined
+          }
+          warn={emailFailed + closerFailed > 0}
+        />
+      </div>
 
       <h2 className="mt-10 text-lg text-brass-400">Live auctions</h2>
       <ul className="mt-3 space-y-2">

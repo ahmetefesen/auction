@@ -107,4 +107,11 @@ Buyers are seeded with 5000.00 TRY available balance.
 | `pnpm lint` | Shared ESLint + typecheck (where configured) |
 | `pnpm db:migrate` | Apply Prisma migrations (PostgreSQL) |
 | `pnpm db:seed` | Demo users + live lot |
+| `pnpm test:integration` | API integration tests (Postgres + Redis required) |
 | `docker compose up -d` | Postgres + Redis + Mailhog |
+
+## Docs
+
+- [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) — architecture, bid path, escrow, realtime catch-up, and trade-offs
+- [docs/TESTING.md](docs/TESTING.md) — integration test setup and acceptance criteria
+

@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   await app.listen({ port: env.API_PORT, host: env.API_HOST });
 
   const { io, pubClient, subClient } = await createSocketServer(app.server, env);
+  app.io = io;
   eventBus.attachIo(io);
   eventBus.startSubscriber(subClient.duplicate());
 

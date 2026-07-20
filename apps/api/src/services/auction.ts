@@ -3,6 +3,7 @@ import type { Auction, Role } from "@auction/db";
 import {
   AuctionStatus as SharedAuctionStatus,
   type AuctionDto,
+  type AuctionSnapshotDto,
   type CreateAuctionInput,
   type UpdateAuctionInput,
   Role as SharedRole,
@@ -31,7 +32,10 @@ function toDto(
     reserveMet:
       auction.reservePrice === null
         ? null
-        : showReserve || auction.status === SharedAuctionStatus.SETTLED || auction.status === SharedAuctionStatus.ENDED
+        : showReserve ||
+            auction.status === SharedAuctionStatus.SETTLED ||
+            auction.status === SharedAuctionStatus.ENDED ||
+            auction.status === SharedAuctionStatus.NEGOTIATING
           ? auction.currentBid >= auction.reservePrice
           : null,
     buyNowPrice: auction.buyNowPrice,
@@ -40,6 +44,8 @@ function toDto(
     currentWinnerId: auction.currentWinnerId,
     startsAt: auction.startsAt.toISOString(),
     endsAt: auction.endsAt.toISOString(),
+    negotiationExpiresAt: auction.negotiationExpiresAt?.toISOString() ?? null,
+    counterOfferCents: auction.counterOfferCents ?? null,
     images: (auction.images ?? []).map((img) => ({
       id: img.id,
       url: img.url,
@@ -213,7 +219,7 @@ export async function listAuctions(input: {
   sellerId?: string;
 }): Promise<{ items: AuctionDto[]; total: number }> {
   const where = {
-    ...(input.status ? { status: input.status as AuctionStatus } : { status: { in: [AuctionStatus.LIVE, AuctionStatus.SCHEDULED, AuctionStatus.ENDED, AuctionStatus.SETTLED] } }),
+    ...(input.status ? { status: input.status as AuctionStatus } : { status: { in: [AuctionStatus.LIVE, AuctionStatus.SCHEDULED, AuctionStatus.NEGOTIATING, AuctionStatus.ENDED, AuctionStatus.SETTLED] } }),
     ...(input.sellerId ? { sellerId: input.sellerId } : {}),
   };
   const [total, rows] = await Promise.all([
@@ -232,12 +238,68 @@ export async function listAuctions(input: {
   };
 }
 
+/** Authoritative auction state for reconnect / catch-up (snapshot + realtime deltas). */
+export async function getAuctionSnapshot(
+  auctionId: string,
+  viewerUserId: string | null,
+): Promise<AuctionSnapshotDto> {
+  const auction = await prisma.auction.findUnique({ where: { id: auctionId } });
+  if (!auction) {
+    throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
+  }
+
+  const [bids, walletRow] = await Promise.all([
+    prisma.bid.findMany({
+      where: { auctionId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    viewerUserId
+      ? prisma.wallet.findUnique({ where: { userId: viewerUserId } })
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    serverTime: new Date().toISOString(),
+    auction: {
+      id: auction.id,
+      status: auction.status,
+      currentBid: auction.currentBid,
+      currentWinnerId: auction.currentWinnerId,
+      endsAt: auction.endsAt.toISOString(),
+      version: auction.version,
+      minIncrement: auction.minIncrement,
+      startingPrice: auction.startingPrice,
+      antiSnipeWindowSec: auction.antiSnipeWindowSec,
+      antiSnipeExtendSec: auction.antiSnipeExtendSec,
+      negotiationExpiresAt: auction.negotiationExpiresAt?.toISOString() ?? null,
+      counterOfferCents: auction.counterOfferCents ?? null,
+    },
+    bids: bids.map((b) => ({
+      id: b.id,
+      auctionId: b.auctionId,
+      bidderId: b.bidderId,
+      amount: b.amount,
+      isProxy: b.isProxy,
+      createdAt: b.createdAt.toISOString(),
+    })),
+    wallet: walletRow
+      ? {
+          availableBalance: walletRow.availableBalance,
+          heldBalance: walletRow.heldBalance,
+        }
+      : null,
+  };
+}
+
+export const NEGOTIATION_WINDOW_MS = 24 * 60 * 60_000;
+
 export async function endAndSettleAuction(
   auctionId: string,
   eventBus: EventBus,
   emailQueue: EmailQueue,
 ): Promise<void> {
-  const settled = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
     const auction = await lockAuctionById(tx, auctionId);
     if (!auction) {
       return null;
@@ -249,19 +311,12 @@ export async function endAndSettleAuction(
       return null;
     }
 
+    const hasWinner = Boolean(auction.currentWinnerId && auction.currentBid > 0);
     const reserveMet =
       auction.reservePrice === null || auction.currentBid >= auction.reservePrice;
 
-    if (!auction.currentWinnerId || auction.currentBid <= 0 || !reserveMet) {
-      if (auction.currentWinnerId && auction.currentBid > 0) {
-        await lockWalletsByUserIds(tx, [auction.currentWinnerId]);
-        await walletService.releaseHoldInTx(
-          tx,
-          auction.currentWinnerId,
-          auction.id,
-          auction.currentBid,
-        );
-      }
+    // No bids → end empty
+    if (!hasWinner) {
       const ended = await tx.auction.update({
         where: { id: auction.id },
         data: {
@@ -270,9 +325,35 @@ export async function endAndSettleAuction(
           version: { increment: 1 },
         },
       });
-      return { ended, settled: false as const, winnerId: null as string | null, amount: 0 };
+      return {
+        kind: "ended" as const,
+        auction: ended,
+        winnerId: null as string | null,
+        amount: 0,
+      };
     }
 
+    // Bids below reserve → keep hold, open negotiation window
+    if (!reserveMet) {
+      const negotiationExpiresAt = new Date(Date.now() + NEGOTIATION_WINDOW_MS);
+      const negotiating = await tx.auction.update({
+        where: { id: auction.id },
+        data: {
+          status: AuctionStatus.NEGOTIATING,
+          negotiationExpiresAt,
+          counterOfferCents: null,
+          version: { increment: 1 },
+        },
+      });
+      return {
+        kind: "negotiating" as const,
+        auction: negotiating,
+        winnerId: auction.currentWinnerId!,
+        amount: auction.currentBid,
+      };
+    }
+
+    // Reserve met → settle
     await tx.auction.update({
       where: { id: auction.id },
       data: {
@@ -283,13 +364,13 @@ export async function endAndSettleAuction(
 
     await walletService.captureHoldInTx(
       tx,
-      auction.currentWinnerId,
+      auction.currentWinnerId!,
       auction.sellerId,
       auction.id,
       auction.currentBid,
     );
 
-    const ended = await tx.auction.update({
+    const settled = await tx.auction.update({
       where: { id: auction.id },
       data: {
         status: AuctionStatus.SETTLED,
@@ -297,35 +378,46 @@ export async function endAndSettleAuction(
       },
     });
     return {
-      ended,
-      settled: true as const,
-      winnerId: auction.currentWinnerId,
+      kind: "settled" as const,
+      auction: settled,
+      winnerId: auction.currentWinnerId!,
       amount: auction.currentBid,
     };
   });
 
-  if (!settled) {
+  if (!outcome) {
+    return;
+  }
+
+  if (outcome.kind === "negotiating") {
+    await eventBus.publish(RealtimeEvent.AUCTION_NEGOTIATING, {
+      auctionId: outcome.auction.id,
+      currentBidCents: outcome.amount,
+      currentWinnerId: outcome.winnerId,
+      negotiationExpiresAt: outcome.auction.negotiationExpiresAt!.toISOString(),
+      counterOfferCents: null,
+    });
     return;
   }
 
   await eventBus.publish(RealtimeEvent.AUCTION_ENDED, {
-    auctionId: settled.ended.id,
-    winnerId: settled.winnerId,
-    finalBidCents: settled.ended.currentBid,
+    auctionId: outcome.auction.id,
+    winnerId: outcome.winnerId,
+    finalBidCents: outcome.auction.currentBid,
   });
 
-  if (settled.settled) {
+  if (outcome.kind === "settled") {
     await eventBus.publish(RealtimeEvent.AUCTION_SETTLED, {
-      auctionId: settled.ended.id,
-      winnerId: settled.winnerId,
-      amountCents: settled.amount,
+      auctionId: outcome.auction.id,
+      winnerId: outcome.winnerId,
+      amountCents: outcome.amount,
     });
-    if (settled.winnerId) {
+    if (outcome.winnerId) {
       await emailQueue.addWon({
-        userId: settled.winnerId,
-        auctionId: settled.ended.id,
-        auctionTitle: settled.ended.title,
-        amountCents: settled.amount,
+        userId: outcome.winnerId,
+        auctionId: outcome.auction.id,
+        auctionTitle: outcome.auction.title,
+        amountCents: outcome.amount,
       });
     }
   }

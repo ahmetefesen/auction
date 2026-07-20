@@ -34,6 +34,11 @@ export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | undefined;
 
+/** Clears cached env — use in tests when process.env changes between suites. */
+export function resetEnvCache(): void {
+  cached = undefined;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (cached) {
     return cached;

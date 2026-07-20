@@ -11,21 +11,44 @@ import {
   updateAuctionSchema,
   createPlaceBidSchema,
   createSetProxyBidSchema,
+  PlaceBidSchema,
+  CounterOfferSchema,
 } from "@auction/shared";
 import { AppError } from "../lib/errors.js";
-import { requireBuyer, requireSeller, optionalAuth } from "../plugins/auth.js";
+import { requireBuyer, requireSeller, optionalAuth, requireAuth } from "../plugins/auth.js";
 import { requireUuidParam } from "../plugins/validate-params.js";
 import {
   cancelAuction,
   createAuction,
   getAuction,
+  getAuctionSnapshot,
   listAuctions,
   publishAuction,
   updateAuction,
   endAndSettleAuction,
 } from "../services/auction.js";
-import { placeBid, setProxyBid } from "../services/bidding.js";
+import { placeBid, setProxyBid, biddingService } from "../services/bidding.js";
+import {
+  acceptCounterOffer,
+  acceptHighBid,
+  declineNegotiation,
+  proposeCounterOffer,
+} from "../services/negotiation.js";
 import { writeAuditLog, requestMeta } from "../services/audit.js";
+import { consumeBidToken } from "../lib/bid-rate-limit.js";
+
+async function assertBidRateLimit(
+  redis: Parameters<typeof consumeBidToken>[0],
+  userId: string,
+  auctionId: string,
+): Promise<void> {
+  const limit = await consumeBidToken(redis, userId, auctionId);
+  if (!limit.allowed) {
+    throw new AppError(429, "BID_RATE_LIMITED", "Too many bids on this auction. Retry shortly.", {
+      retryAfterSec: limit.retryAfterSec,
+    });
+  }
+}
 
 export async function auctionRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auctions", { preHandler: optionalAuth }, async (request) => {
@@ -159,11 +182,50 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.post<{ Params: { id: string } }>(
+    "/auctions/:id/bid-preview",
+    { preHandler: [requireUuidParam(), requireBuyer] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const body = PlaceBidSchema.parse(request.body);
+      return biddingService.previewBid({
+        auctionId: request.params.id,
+        bidderId: user.id,
+        amountCents: body.amountCents,
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
     "/auctions/:id/bids",
     { preHandler: [requireUuidParam(), requireBuyer] },
     async (request) => {
       const user = request.user;
       if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+
+      const idempotencyHeader = request.headers["idempotency-key"];
+      const idempotencyKey = typeof idempotencyHeader === "string" ? idempotencyHeader : null;
+
+      if (idempotencyKey) {
+        const existing = await prisma.bidIdempotency.findUnique({
+          where: { key_userId: { key: idempotencyKey, userId: user.id } },
+        });
+        if (existing) {
+          const auction = await prisma.auction.findUniqueOrThrow({
+            where: { id: request.params.id },
+          });
+          return {
+            bidId: existing.bidId,
+            auctionId: auction.id,
+            currentBid: auction.currentBid,
+            currentWinnerId: auction.currentWinnerId,
+            endsAt: auction.endsAt.toISOString(),
+            extended: false,
+          };
+        }
+      }
+
+      await assertBidRateLimit(app.redis, user.id, request.params.id);
 
       const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
       if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
@@ -173,9 +235,6 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
         minIncrement: auction.minIncrement,
         startingPrice: auction.startingPrice,
       }).parse(request.body);
-
-      const idempotencyHeader = request.headers["idempotency-key"];
-      const idempotencyKey = typeof idempotencyHeader === "string" ? idempotencyHeader : null;
 
       const result = await placeBid({
         auctionId: request.params.id,
@@ -204,6 +263,8 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       const user = request.user;
       if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
 
+      await assertBidRateLimit(app.redis, user.id, request.params.id);
+
       const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
       if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
 
@@ -224,6 +285,15 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
         currentWinnerId: result.auction.currentWinnerId,
         endsAt: result.auction.endsAt.toISOString(),
       };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/auctions/:id/snapshot",
+    { preHandler: [requireUuidParam(), optionalAuth] },
+    async (request) => {
+      const viewerUserId = request.user?.id ?? null;
+      return getAuctionSnapshot(request.params.id, viewerUserId);
     },
   );
 
@@ -308,6 +378,74 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       sellerId: user.role === "ADMIN" ? undefined : user.id,
     });
   });
+
+  app.post<{ Params: { id: string } }>(
+    "/auctions/:id/negotiation/accept",
+    { preHandler: [requireUuidParam(), requireSeller] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const auction = await acceptHighBid({
+        auctionId: request.params.id,
+        actorId: user.id,
+        actorRole: user.role,
+        eventBus: app.eventBus,
+        emailQueue: app.emailQueue,
+      });
+      return { auction };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/auctions/:id/negotiation/counter",
+    { preHandler: [requireUuidParam(), requireSeller] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const body = CounterOfferSchema.parse(request.body);
+      const auction = await proposeCounterOffer({
+        auctionId: request.params.id,
+        actorId: user.id,
+        actorRole: user.role,
+        amountCents: body.amountCents,
+        eventBus: app.eventBus,
+      });
+      return { auction };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/auctions/:id/negotiation/accept-counter",
+    { preHandler: [requireUuidParam(), requireBuyer] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const auction = await acceptCounterOffer({
+        auctionId: request.params.id,
+        actorId: user.id,
+        actorRole: user.role,
+        eventBus: app.eventBus,
+        emailQueue: app.emailQueue,
+      });
+      return { auction };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/auctions/:id/negotiation/decline",
+    { preHandler: [requireUuidParam(), requireAuth] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const auction = await declineNegotiation({
+        auctionId: request.params.id,
+        actorId: user.id,
+        actorRole: user.role,
+        eventBus: app.eventBus,
+      });
+      return { auction };
+    },
+  );
 
   // Internal helper for admin force-end re-export
   void endAndSettleAuction;

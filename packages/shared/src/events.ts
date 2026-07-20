@@ -5,6 +5,7 @@ export const RealtimeEvent = {
   AUCTION_EXTENDED: "auction.extended",
   AUCTION_ENDED: "auction.ended",
   AUCTION_SETTLED: "auction.settled",
+  AUCTION_NEGOTIATING: "auction.negotiating",
   WALLET_UPDATED: "wallet.updated",
 } as const;
 
@@ -38,6 +39,16 @@ export const auctionEndedPayloadSchema = z.object({
 });
 
 export type AuctionEndedPayload = z.infer<typeof auctionEndedPayloadSchema>;
+
+export const auctionNegotiatingPayloadSchema = z.object({
+  auctionId: z.string().uuid(),
+  currentBidCents: z.number().int().nonnegative(),
+  currentWinnerId: z.string().uuid(),
+  negotiationExpiresAt: z.string().datetime(),
+  counterOfferCents: z.number().int().positive().nullable(),
+});
+
+export type AuctionNegotiatingPayload = z.infer<typeof auctionNegotiatingPayloadSchema>;
 
 export const auctionSettledPayloadSchema = z.object({
   auctionId: z.string().uuid(),

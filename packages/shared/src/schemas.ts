@@ -107,6 +107,20 @@ export type PlaceBidInput = z.infer<typeof PlaceBidSchema>;
 /** @deprecated Use PlaceBidSchema */
 export const placeBidSchema = PlaceBidSchema;
 
+export const bidPreviewSchema = z.object({
+  auctionId: uuidSchema,
+  amountCents: moneyCentsSchema,
+  minRequiredCents: moneyCentsSchema,
+  meetsMinimum: z.boolean(),
+  becomesLeader: z.boolean(),
+  wouldExtend: z.boolean(),
+  extendedEndsAt: z.string().datetime().nullable(),
+  holdDeltaCents: moneyCentsSchema,
+  availableBalanceCents: moneyCentsSchema,
+  insufficientFunds: z.boolean(),
+});
+export type BidPreview = z.infer<typeof bidPreviewSchema>;
+
 export type PlaceBidContext = {
   currentBid: number;
   minIncrement: number;
@@ -169,12 +183,92 @@ export const auditLogListQuerySchema = z.object({
 });
 export type AuditLogListQuery = z.infer<typeof auditLogListQuerySchema>;
 
+export const auctionSnapshotBidSchema = z.object({
+  id: uuidSchema,
+  auctionId: uuidSchema,
+  bidderId: uuidSchema,
+  amount: moneyCentsSchema,
+  isProxy: z.boolean(),
+  createdAt: z.string().datetime(),
+});
+
+export const auctionSnapshotSchema = z.object({
+  serverTime: z.string().datetime(),
+  auction: z.object({
+    id: uuidSchema,
+    status: z.enum([
+      AuctionStatus.DRAFT,
+      AuctionStatus.SCHEDULED,
+      AuctionStatus.LIVE,
+      AuctionStatus.NEGOTIATING,
+      AuctionStatus.ENDED,
+      AuctionStatus.CANCELLED,
+      AuctionStatus.SETTLED,
+    ]),
+    currentBid: moneyCentsSchema,
+    currentWinnerId: uuidSchema.nullable(),
+    endsAt: z.string().datetime(),
+    version: z.number().int().nonnegative(),
+    minIncrement: positiveMoneyCentsSchema,
+    startingPrice: positiveMoneyCentsSchema,
+    antiSnipeWindowSec: z.number().int().positive(),
+    antiSnipeExtendSec: z.number().int().positive(),
+    negotiationExpiresAt: z.string().datetime().nullable().optional(),
+    counterOfferCents: moneyCentsSchema.nullable().optional(),
+  }),
+  bids: z.array(auctionSnapshotBidSchema),
+  wallet: z
+    .object({
+      availableBalance: moneyCentsSchema,
+      heldBalance: moneyCentsSchema,
+    })
+    .nullable(),
+});
+export type AuctionSnapshot = z.infer<typeof auctionSnapshotSchema>;
+
+export const queueJobCountsSchema = z.object({
+  waiting: z.number().int().nonnegative(),
+  active: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  delayed: z.number().int().nonnegative(),
+});
+
+export const adminMetricsSchema = z.object({
+  serverTime: z.string().datetime(),
+  sockets: z.object({
+    active: z.number().int().nonnegative().nullable(),
+  }),
+  redis: z.object({
+    latencyMs: z.number().nonnegative().nullable(),
+    ok: z.boolean(),
+  }),
+  postgres: z.object({
+    latencyMs: z.number().nonnegative().nullable(),
+    ok: z.boolean(),
+  }),
+  wallet: z.object({
+    totalHeldBalance: moneyCentsSchema,
+    totalAvailableBalance: moneyCentsSchema,
+  }),
+  auctions: z.object({
+    liveCount: z.number().int().nonnegative(),
+    endingSoonCount: z.number().int().nonnegative(),
+  }),
+  queues: z.object({
+    email: queueJobCountsSchema.nullable(),
+    auctionCloser: queueJobCountsSchema.nullable(),
+  }),
+});
+export type AdminMetrics = z.infer<typeof adminMetricsSchema>;
+
 export const auctionListQuerySchema = z.object({
   status: z
     .enum([
       AuctionStatus.DRAFT,
       AuctionStatus.SCHEDULED,
       AuctionStatus.LIVE,
+      AuctionStatus.NEGOTIATING,
       AuctionStatus.ENDED,
       AuctionStatus.CANCELLED,
       AuctionStatus.SETTLED,
@@ -184,6 +278,11 @@ export const auctionListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
 });
 export type AuctionListQuery = z.infer<typeof auctionListQuerySchema>;
+
+export const CounterOfferSchema = z.object({
+  amountCents: positiveMoneyCentsSchema,
+});
+export type CounterOfferInput = z.infer<typeof CounterOfferSchema>;
 
 // --- API responses ---
 

@@ -6,6 +6,7 @@ import { requireAdmin, requireSeller } from "../plugins/auth.js";
 import { requireUuidParam } from "../plugins/validate-params.js";
 import { endAndSettleAuction, cancelAuction } from "../services/auction.js";
 import { writeAuditLogTx, requestMeta } from "../services/audit.js";
+import { collectAdminMetrics } from "../services/metrics.js";
 
 function maskEmail(email: string): string {
   const at = email.indexOf("@");
@@ -16,6 +17,14 @@ function maskEmail(email: string): string {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/admin/metrics", { preHandler: requireAdmin }, async () => {
+    return collectAdminMetrics({
+      redis: app.redis,
+      redisUrl: app.env.REDIS_URL,
+      io: app.io,
+    });
+  });
+
   app.get("/admin/auctions/live", { preHandler: requireAdmin }, async () => {
     const items = await prisma.auction.findMany({
       where: { status: AuctionStatus.LIVE },

@@ -26,3 +26,13 @@ export function formatMoney(cents: number, currency: string): string {
     .padStart(2, "0");
   return `${major}.${minor} ${currency}`;
 }
+
+/**
+ * Stable anonymized bidder label for public bid feeds.
+ * Uses last 2 hex chars of the id (UUID digits) — does not expose the full id.
+ */
+export function maskBidderId(bidderId: string): string {
+  const hex = bidderId.replace(/-/g, "").toLowerCase();
+  const tail = hex.slice(-2) || "??";
+  return `User***${tail}`;
+}

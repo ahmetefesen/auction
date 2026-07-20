@@ -36,6 +36,8 @@ export type AuctionDto = {
   currentWinnerId: string | null;
   startsAt: string;
   endsAt: string;
+  negotiationExpiresAt: string | null;
+  counterOfferCents: number | null;
   images: AuctionImageDto[];
   createdAt: string;
   updatedAt: string;
@@ -48,6 +50,77 @@ export type BidDto = {
   amount: number;
   isProxy: boolean;
   createdAt: string;
+};
+
+/** Live auction state for reconnect / catch-up sync */
+export type AuctionSnapshotDto = {
+  serverTime: string;
+  auction: {
+    id: string;
+    status: AuctionStatus;
+    currentBid: number;
+    currentWinnerId: string | null;
+    endsAt: string;
+    version: number;
+    minIncrement: number;
+    startingPrice: number;
+    antiSnipeWindowSec: number;
+    antiSnipeExtendSec: number;
+    negotiationExpiresAt?: string | null;
+    counterOfferCents?: number | null;
+  };
+  bids: BidDto[];
+  wallet: WalletDto | null;
+};
+
+export type QueueJobCountsDto = {
+  waiting: number;
+  active: number;
+  completed: number;
+  failed: number;
+  delayed: number;
+};
+
+/** Admin ops dashboard metrics */
+export type AdminMetricsDto = {
+  serverTime: string;
+  sockets: {
+    active: number | null;
+  };
+  redis: {
+    latencyMs: number | null;
+    ok: boolean;
+  };
+  postgres: {
+    latencyMs: number | null;
+    ok: boolean;
+  };
+  wallet: {
+    totalHeldBalance: number;
+    totalAvailableBalance: number;
+  };
+  auctions: {
+    liveCount: number;
+    endingSoonCount: number;
+  };
+  queues: {
+    email: QueueJobCountsDto | null;
+    auctionCloser: QueueJobCountsDto | null;
+  };
+};
+
+/** Read-only bid preview for Smart Bid Helper (no writes). */
+export type BidPreviewDto = {
+  auctionId: string;
+  amountCents: number;
+  minRequiredCents: number;
+  meetsMinimum: boolean;
+  becomesLeader: boolean;
+  wouldExtend: boolean;
+  extendedEndsAt: string | null;
+  holdDeltaCents: number;
+  availableBalanceCents: number;
+  insufficientFunds: boolean;
 };
 
 export type PaginatedResponse<T> = {

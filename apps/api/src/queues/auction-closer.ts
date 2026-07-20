@@ -1,6 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { prisma, AuctionStatus } from "@auction/db";
 import { endAndSettleAuction } from "../services/auction.js";
+import { expireNegotiationIfDue } from "../services/negotiation.js";
 import type { EventBus } from "../realtime/event-bus.js";
 import type { EmailQueue } from "./email.js";
 
@@ -8,7 +9,7 @@ const QUEUE_NAME = "auction-closer";
 
 /**
  * AuctionCloserWorker — ticks every 1s.
- * LIVE + endsAt <= now → lock, ENDED → SETTLED (+ captureHold), emit settled.
+ * LIVE + endsAt <= now → settle / negotiate; NEGOTIATING expired → release + ENDED.
  */
 export function startAuctionCloser(
   redisUrl: string,
@@ -32,6 +33,18 @@ export function startAuctionCloser(
         await endAndSettleAuction(a.id, eventBus, emailQueue);
       }
 
+      const negotiatingDue = await prisma.auction.findMany({
+        where: {
+          status: AuctionStatus.NEGOTIATING,
+          negotiationExpiresAt: { lte: new Date() },
+        },
+        select: { id: true },
+        take: 50,
+      });
+      for (const a of negotiatingDue) {
+        await expireNegotiationIfDue(a.id, eventBus);
+      }
+
       await prisma.auction.updateMany({
         where: {
           status: AuctionStatus.SCHEDULED,
@@ -40,7 +53,6 @@ export function startAuctionCloser(
         data: { status: AuctionStatus.LIVE },
       });
 
-      // Schedule ending-soon emails (15 min window, once per auction via jobId)
       const soon = await prisma.auction.findMany({
         where: {
           status: AuctionStatus.LIVE,

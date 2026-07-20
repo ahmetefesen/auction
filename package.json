@@ -9,7 +9,9 @@
     "db:generate": "pnpm --filter @auction/db generate",
     "db:migrate": "pnpm --filter @auction/db migrate:dev",
     "db:seed": "pnpm --filter @auction/db seed",
-    "db:deploy": "pnpm --filter @auction/db migrate:deploy"
+    "db:deploy": "pnpm --filter @auction/db migrate:deploy",
+    "test": "pnpm --filter @auction/api test",
+    "test:integration": "pnpm --filter @auction/api test:integration"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

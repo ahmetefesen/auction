@@ -22,6 +22,7 @@ enum AuctionStatus {
   DRAFT
   SCHEDULED
   LIVE
+  NEGOTIATING
   ENDED
   CANCELLED
   SETTLED
@@ -125,6 +126,10 @@ model Auction {
   endsAt             DateTime      @db.Timestamptz(3)
   antiSnipeWindowSec Int           @default(30)
   antiSnipeExtendSec Int           @default(60)
+  /// When status is NEGOTIATING — soft deadline for reserve counter-offer window
+  negotiationExpiresAt DateTime?   @db.Timestamptz(3)
+  /// Seller counter-offer amount (minor units); null until seller counters
+  counterOfferCents    Int?
   version            Int           @default(0)
   createdAt          DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
@@ -137,6 +142,7 @@ model Auction {
   watchlist     Watchlist[]
 
   @@index([status, endsAt])
+  @@index([status, negotiationExpiresAt])
   @@index([sellerId])
   @@index([endsAt])
 }

@@ -8,7 +8,7 @@ import {
   type LockedAuction,
   type LockedProxyBid,
 } from "@auction/db";
-import { RealtimeEvent } from "@auction/shared";
+import { RealtimeEvent, type BidPreviewDto } from "@auction/shared";
 import { AppError } from "../lib/errors.js";
 import { walletService } from "./wallet.js";
 import type { EventBus } from "../realtime/event-bus.js";
@@ -130,6 +130,59 @@ async function publishWalletUpdates(eventBus: EventBus, userIds: readonly string
  * Critical high-concurrency bid path — single Serializable transaction + FOR UPDATE.
  */
 export class BiddingService {
+  /** Read-only preview for Smart Bid Helper — no locks, no writes. */
+  async previewBid(input: {
+    auctionId: string;
+    bidderId: string;
+    amountCents: number;
+  }): Promise<BidPreviewDto> {
+    const auction = await prisma.auction.findUnique({ where: { id: input.auctionId } });
+    if (!auction) {
+      throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
+    }
+    if (auction.status !== AuctionStatus.LIVE) {
+      throw new AppError(400, "AUCTION_NOT_LIVE", "Auction is not live");
+    }
+
+    const wallet = await prisma.wallet.findUnique({ where: { userId: input.bidderId } });
+    if (!wallet) {
+      throw new AppError(404, "WALLET_NOT_FOUND", "Wallet not found");
+    }
+
+    const minRequiredCents = minimumNextBid(auction);
+    const meetsMinimum = input.amountCents >= minRequiredCents;
+    const becomesLeader = meetsMinimum;
+
+    const windowMs = auction.antiSnipeWindowSec * 1000;
+    const msRemaining = auction.endsAt.getTime() - Date.now();
+    const withinSnipeWindow = msRemaining > 0 && msRemaining <= windowMs;
+    const wouldExtend = meetsMinimum && withinSnipeWindow;
+    const extendedEndsAt = wouldExtend
+      ? new Date(auction.endsAt.getTime() + auction.antiSnipeExtendSec * 1000).toISOString()
+      : null;
+
+    const holdDeltaCents =
+      auction.currentWinnerId === input.bidderId
+        ? Math.max(0, input.amountCents - auction.currentBid)
+        : input.amountCents;
+
+    const availableBalanceCents = wallet.availableBalance;
+    const insufficientFunds = availableBalanceCents < holdDeltaCents;
+
+    return {
+      auctionId: auction.id,
+      amountCents: input.amountCents,
+      minRequiredCents,
+      meetsMinimum,
+      becomesLeader,
+      wouldExtend,
+      extendedEndsAt,
+      holdDeltaCents,
+      availableBalanceCents,
+      insufficientFunds,
+    };
+  }
+
   async placeBid(input: {
     auctionId: string;
     bidderId: string;
@@ -365,4 +418,11 @@ export async function setProxyBid(
   input: Parameters<BiddingService["setProxyBid"]>[0],
 ): Promise<PlaceBidResult> {
   return biddingService.setProxyBid(input);
+}
+
+/** @deprecated Prefer biddingService.previewBid */
+export async function previewBid(
+  input: Parameters<BiddingService["previewBid"]>[0],
+): Promise<BidPreviewDto> {
+  return biddingService.previewBid(input);
 }

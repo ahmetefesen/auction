@@ -8,11 +8,13 @@ import {
   auctionExtendedPayloadSchema,
   auctionEndedPayloadSchema,
   auctionSettledPayloadSchema,
+  auctionNegotiatingPayloadSchema,
   walletUpdatedPayloadSchema,
   type BidPlacedPayload,
   type AuctionExtendedPayload,
   type AuctionEndedPayload,
   type AuctionSettledPayload,
+  type AuctionNegotiatingPayload,
   type WalletUpdatedPayload,
 } from "@auction/shared";
 
@@ -21,6 +23,7 @@ export type DomainPayload =
   | { event: typeof RealtimeEvent.AUCTION_EXTENDED; data: AuctionExtendedPayload }
   | { event: typeof RealtimeEvent.AUCTION_ENDED; data: AuctionEndedPayload }
   | { event: typeof RealtimeEvent.AUCTION_SETTLED; data: AuctionSettledPayload }
+  | { event: typeof RealtimeEvent.AUCTION_NEGOTIATING; data: AuctionNegotiatingPayload }
   | { event: typeof RealtimeEvent.WALLET_UPDATED; data: WalletUpdatedPayload };
 
 const CHANNEL = "auction:events";
@@ -89,6 +92,12 @@ export class EventBus {
       }
       case RealtimeEvent.AUCTION_SETTLED: {
         const payload = auctionSettledPayloadSchema.safeParse(data);
+        if (!payload.success) return;
+        this.io.to(auctionRoom(payload.data.auctionId)).emit(event, payload.data);
+        return;
+      }
+      case RealtimeEvent.AUCTION_NEGOTIATING: {
+        const payload = auctionNegotiatingPayloadSchema.safeParse(data);
         if (!payload.success) return;
         this.io.to(auctionRoom(payload.data.auctionId)).emit(event, payload.data);
         return;
