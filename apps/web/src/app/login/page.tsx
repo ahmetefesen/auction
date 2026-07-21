@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useFormatApiError } from "@/lib/use-format-api-error";
 
 type AuthUser = {
   id: string;
@@ -12,6 +14,8 @@ type AuthUser = {
 };
 
 export default function LoginPage() {
+  const t = useT();
+  const formatError = useFormatApiError();
   const router = useRouter();
   const [email, setEmail] = useState("buyer@auction.local");
   const [password, setPassword] = useState("Password123!");
@@ -39,17 +43,17 @@ export default function LoginPage() {
         router.push(dest);
         router.refresh();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Login failed");
+        setError(formatError(err));
       }
     });
   }
 
   return (
     <div className="mx-auto max-w-md px-6 py-20">
-      <h1 className="font-display text-4xl text-mist-50">Sign in</h1>
+      <h1 className="font-display text-4xl text-mist-50">{t("auth.signInTitle")}</h1>
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <label className="block text-sm text-mist-300">
-          Email
+          {t("auth.email")}
           <input
             type="email"
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
@@ -59,7 +63,7 @@ export default function LoginPage() {
           />
         </label>
         <label className="block text-sm text-mist-300">
-          Password
+          {t("auth.password")}
           <input
             type="password"
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
@@ -74,13 +78,13 @@ export default function LoginPage() {
           disabled={pending}
           className="w-full bg-brass-500 py-2.5 font-semibold text-ink-950 disabled:opacity-60"
         >
-          {pending ? "Signing in…" : "Sign in"}
+          {pending ? t("auth.signingIn") : t("auth.signIn")}
         </button>
       </form>
       <p className="mt-4 text-sm text-mist-300">
-        No account?{" "}
+        {t("auth.noAccount")}{" "}
         <Link href="/register" className="text-brass-400">
-          Register
+          {t("auth.register")}
         </Link>
       </p>
     </div>

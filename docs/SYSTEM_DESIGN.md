@@ -142,7 +142,7 @@ Admin UI (`/admin`) polls metrics every ~8s and shows compact health cards. See 
 - Admin force-end / force-cancel require a reason and write audit logs.
 - Uploads are size-limited; static files served from a configured upload dir.
 
-## 10. Related docs
+## Related realtime notes
 
-- [README.md](../README.md) — bootstrap, demo accounts, scripts
-- [TESTING.md](TESTING.md) — integration tests, snapshot & metrics acceptance
+- Socket.IO: optional auth (guest read-only auction rooms); JWT cookie attaches user room for wallet events.
+- `GET /auctions/:id/proxy-bid` — buyer’s current proxy max (nullable).

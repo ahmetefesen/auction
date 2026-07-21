@@ -9,6 +9,9 @@ import {
   type AuctionExtendedPayload,
   type AuctionEndedPayload,
   type AuctionNegotiatingPayload,
+  type AuctionSettledPayload,
+  type WalletDto,
+  type WalletUpdatedPayload,
 } from "@auction/shared";
 import { API_URL } from "./api";
 
@@ -38,9 +41,11 @@ function applySnapshotToState(
     setWinnerId: (v: string | null) => void;
     setLiveBids: (v: LiveBid[]) => void;
     setEnded: (v: boolean) => void;
+    setSettled: (v: boolean) => void;
     setNegotiating: (v: boolean) => void;
     setNegotiationExpiresAt: (v: string | null) => void;
     setCounterOfferCents: (v: number | null) => void;
+    setWallet: (v: WalletDto | null) => void;
     setServerOffsetMs: (v: number) => void;
     prevWinner: MutableRefObject<string | null>;
   },
@@ -57,10 +62,14 @@ function applySnapshotToState(
       createdAt: b.createdAt,
     })),
   );
-  setters.setEnded(data.auction.status === "ENDED" || data.auction.status === "SETTLED");
+  setters.setSettled(data.auction.status === "SETTLED");
+  setters.setEnded(
+    data.auction.status === "ENDED" || data.auction.status === "SETTLED",
+  );
   setters.setNegotiating(data.auction.status === "NEGOTIATING");
   setters.setNegotiationExpiresAt(data.auction.negotiationExpiresAt ?? null);
   setters.setCounterOfferCents(data.auction.counterOfferCents ?? null);
+  setters.setWallet(data.wallet);
   setters.prevWinner.current = data.auction.currentWinnerId;
   const serverMs = new Date(data.serverTime).getTime();
   setters.setServerOffsetMs(serverMs - Date.now());
@@ -77,12 +86,15 @@ export function useAuctionSocket(
   const [serverOffsetMs, setServerOffsetMs] = useState(0);
   const [liveBids, setLiveBids] = useState<LiveBid[]>([]);
   const [ended, setEnded] = useState(false);
+  const [settled, setSettled] = useState(false);
   const [negotiating, setNegotiating] = useState(false);
   const [negotiationExpiresAt, setNegotiationExpiresAt] = useState<string | null>(null);
   const [counterOfferCents, setCounterOfferCents] = useState<number | null>(null);
+  const [wallet, setWallet] = useState<WalletDto | null>(null);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [extendedFlash, setExtendedFlash] = useState(false);
   const prevWinner = useRef<string | null>(null);
   const onSnapshotSyncRef = useRef(onSnapshotSync);
   onSnapshotSyncRef.current = onSnapshotSync;
@@ -118,9 +130,11 @@ export function useAuctionSocket(
         setWinnerId,
         setLiveBids,
         setEnded,
+        setSettled,
         setNegotiating,
         setNegotiationExpiresAt,
         setCounterOfferCents,
+        setWallet,
         setServerOffsetMs,
         prevWinner,
       });
@@ -192,6 +206,8 @@ export function useAuctionSocket(
     socket.on(RealtimeEvent.AUCTION_EXTENDED, (payload: AuctionExtendedPayload) => {
       if (payload.auctionId !== auctionId) return;
       setEndsAt(payload.endsAt);
+      setExtendedFlash(true);
+      window.setTimeout(() => setExtendedFlash(false), 3000);
     });
 
     socket.on(RealtimeEvent.AUCTION_ENDED, (payload: AuctionEndedPayload) => {
@@ -202,14 +218,31 @@ export function useAuctionSocket(
       setCurrentBid(payload.finalBidCents);
     });
 
+    socket.on(RealtimeEvent.AUCTION_SETTLED, (payload: AuctionSettledPayload) => {
+      if (payload.auctionId !== auctionId) return;
+      setSettled(true);
+      setEnded(true);
+      setNegotiating(false);
+      setWinnerId(payload.winnerId);
+      setCurrentBid(payload.amountCents);
+    });
+
     socket.on(RealtimeEvent.AUCTION_NEGOTIATING, (payload: AuctionNegotiatingPayload) => {
       if (payload.auctionId !== auctionId) return;
       setNegotiating(true);
       setEnded(false);
+      setSettled(false);
       setCurrentBid(payload.currentBidCents);
       setWinnerId(payload.currentWinnerId);
       setNegotiationExpiresAt(payload.negotiationExpiresAt);
       setCounterOfferCents(payload.counterOfferCents);
+    });
+
+    socket.on(RealtimeEvent.WALLET_UPDATED, (payload: WalletUpdatedPayload) => {
+      setWallet({
+        availableBalance: payload.availableBalance,
+        heldBalance: payload.heldBalance,
+      });
     });
 
     return () => {
@@ -228,12 +261,15 @@ export function useAuctionSocket(
     endsAt,
     winnerId,
     outbidFlash,
+    extendedFlash,
     serverOffsetMs,
     liveBids,
     ended,
+    settled,
     negotiating,
     negotiationExpiresAt,
     counterOfferCents,
+    wallet,
     syncedAt,
     connected,
     latencyMs,

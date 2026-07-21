@@ -6,9 +6,13 @@ export function formatTry(cents: number): string {
   return formatMoney(cents, CURRENCY);
 }
 
-export function formatCountdown(endsAtIso: string, nowMs: number): string {
+export function formatCountdown(
+  endsAtIso: string,
+  nowMs: number,
+  endedLabel = "Ended",
+): string {
   const diff = new Date(endsAtIso).getTime() - nowMs;
-  if (diff <= 0) return "Ended";
+  if (diff <= 0) return endedLabel;
   const totalSec = Math.floor(diff / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);

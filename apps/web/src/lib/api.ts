@@ -1,3 +1,6 @@
+import { getDictionary } from "@/lib/i18n/dictionaries";
+import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n/types";
+
 const API_URL = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:4000";
 
 export class ApiClientError extends Error {
@@ -16,6 +19,16 @@ export class ApiClientError extends Error {
     this.code = code;
     this.retryAfterSec = retryAfterSec;
   }
+}
+
+export function formatApiError(err: unknown, locale: Locale = DEFAULT_LOCALE): string {
+  const dict = getDictionary(locale);
+  if (err instanceof ApiClientError) {
+    const mapped = dict.errors[err.code as keyof typeof dict.errors];
+    return mapped ?? err.message;
+  }
+  if (err instanceof Error) return err.message;
+  return dict.errors.UNKNOWN;
 }
 
 function parseRetryAfterSec(response: Response, errorObj: unknown): number | null {

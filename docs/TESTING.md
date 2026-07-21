@@ -59,12 +59,17 @@ pnpm --filter @auction/api test:watch
 - Client clears optimistic bid state when snapshot or confirmed socket bid arrives.
 - Failed bids roll back optimistic UI and show error message (manual QA in auction room).
 
-## API: reconnect snapshot
+## UI smoke checklist (manual)
 
-```
-GET /auctions/:id/snapshot
-```
+After `pnpm dev`, verify:
 
-Optional auth cookie — when present, includes viewer wallet balances.
+1. Guest opens `/auctions/:id` — socket connects (not permanently “Kopuk”), bid form requires login.
+2. Buyer login → header shows Cüzdan + İzleme (not Admin); wallet badge amount visible.
+3. Place bid → preview in TRY; outbid flash; wallet held updates on `/wallet` without full reload.
+4. Watchlist toggle on lot → appears on `/watchlist`.
+5. Seller: draft save, image upload, reserve, then publish; cancel draft/live.
+6. `GET /auctions/:id/proxy-bid` returns current max for buyer after `PUT`.
 
-Response shape: `AuctionSnapshotDto` in `@auction/shared`.
+## Socket auth
+
+Socket.IO allows guest connections (optional cookie). Authenticated users still join `user:{id}` for `wallet.updated`. Auction rooms remain readable by guests via `auction:join`.

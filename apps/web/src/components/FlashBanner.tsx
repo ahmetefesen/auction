@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 type Flash = {
   kind: "welcome" | "signed_in";
@@ -8,6 +9,7 @@ type Flash = {
 };
 
 export function FlashBanner() {
+  const t = useT();
   const [flash, setFlash] = useState<Flash | null>(null);
 
   useEffect(() => {
@@ -28,8 +30,8 @@ export function FlashBanner() {
 
   const message =
     flash.kind === "welcome"
-      ? `Hoş geldin, ${flash.name}! Hesabın hazır.`
-      : `Tekrar hoş geldin, ${flash.name}.`;
+      ? t("flash.welcome", { name: flash.name })
+      : t("flash.signedIn", { name: flash.name });
 
   return (
     <p

@@ -37,12 +37,15 @@ export async function createSocketServer(
 
   io.adapter(createAdapter(pubClient, subClient));
 
+  /** Optional auth: guests may connect for read-only auction rooms. */
   io.use(async (socket, next) => {
     try {
       const cookies = parseCookieHeader(socket.request.headers.cookie);
       const token = cookies[ACCESS_COOKIE];
       if (!token) {
-        next(new Error("Unauthorized"));
+        socket.data.userId = null;
+        socket.data.role = null;
+        next();
         return;
       }
       const payload = await verifyAccessToken(env, token);
@@ -50,7 +53,10 @@ export async function createSocketServer(
       socket.data.role = payload.role;
       next();
     } catch {
-      next(new Error("Unauthorized"));
+      // Invalid token — still allow guest connection
+      socket.data.userId = null;
+      socket.data.role = null;
+      next();
     }
   });
 

@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import type { AdminMetricsDto } from "@auction/shared";
 import { apiFetch } from "@/lib/api";
+import { useSession } from "@/lib/auth/session";
 import { formatTry } from "@/lib/format";
+import { useT, useLocale, localeToBcp47 } from "@/lib/i18n";
+import { useFormatApiError } from "@/lib/use-format-api-error";
 
 type AuditItem = {
   id: string;
@@ -59,6 +62,11 @@ function HealthCard({
 }
 
 export default function AdminPage() {
+  const t = useT();
+  const { locale } = useLocale();
+  const formatError = useFormatApiError();
+  const bcp47 = localeToBcp47(locale);
+  const { loaded, isAdmin } = useSession();
   const [logs, setLogs] = useState<AuditItem[]>([]);
   const [live, setLive] = useState<LiveAuction[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -97,21 +105,37 @@ export default function AdminPage() {
         setMetrics(metricsRes);
         setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Admin access required");
+        setError(formatError(err));
       }
     });
   }
 
   useEffect(() => {
+    if (!loaded || !isAdmin) return;
     load();
-  }, []);
+  }, [loaded, isAdmin]);
 
   useEffect(() => {
+    if (!loaded || !isAdmin) return;
     const id = window.setInterval(() => {
       void loadMetrics();
     }, METRICS_POLL_MS);
     return () => window.clearInterval(id);
-  }, [loadMetrics]);
+  }, [loadMetrics, loaded, isAdmin]);
+
+  if (loaded && !isAdmin) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 py-16">
+        <h1 className="font-display text-4xl text-mist-50">{t("admin.title")}</h1>
+        <p className="mt-4 text-mist-300">
+          {t("admin.adminOnly")}{" "}
+          <Link href="/login" className="text-brass-400 hover:underline">
+            {t("admin.signIn")}
+          </Link>
+        </p>
+      </div>
+    );
+  }
 
   function toggleStatus(user: UserItem): void {
     startTransition(async () => {
@@ -124,7 +148,7 @@ export default function AdminPage() {
         });
         load();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Update failed");
+        setError(formatError(err));
       }
     });
   }
@@ -145,7 +169,7 @@ export default function AdminPage() {
         setForceReason("");
         load();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Force action failed");
+        setError(formatError(err));
       }
     });
   }
@@ -155,61 +179,67 @@ export default function AdminPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
-      <h1 className="font-display text-4xl text-mist-50">Admin</h1>
-      <p className="mt-2 text-mist-300">Live ops, emergency controls, and audit trail.</p>
+      <h1 className="font-display text-4xl text-mist-50">{t("admin.title")}</h1>
+      <p className="mt-2 text-mist-300">{t("admin.subtitle")}</p>
       {error ? <p className="mt-4 text-red-300">{error}</p> : null}
 
-      <h2 className="mt-10 text-lg text-brass-400">System health</h2>
-      <p className="mt-1 text-xs text-mist-300">Auto-refreshes every {METRICS_POLL_MS / 1000}s</p>
+      <h2 className="mt-10 text-lg text-brass-400">{t("admin.systemHealth")}</h2>
+      <p className="mt-1 text-xs text-mist-300">
+        {t("admin.autoRefresh", { sec: METRICS_POLL_MS / 1000 })}
+      </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <HealthCard
-          label="Active sockets"
+          label={t("admin.activeSockets")}
           value={metrics?.sockets.active == null ? "—" : String(metrics.sockets.active)}
-          hint={metrics?.sockets.active == null ? "Socket.IO not attached" : undefined}
+          hint={metrics?.sockets.active == null ? t("admin.socketHint") : undefined}
         />
         <HealthCard
-          label="Redis latency"
+          label={t("admin.redisLatency")}
           value={
             metrics?.redis.latencyMs == null ? "down" : `${metrics.redis.latencyMs} ms`
           }
           warn={metrics ? !metrics.redis.ok : false}
         />
         <HealthCard
-          label="Postgres latency"
+          label={t("admin.postgresLatency")}
           value={
             metrics?.postgres.latencyMs == null ? "down" : `${metrics.postgres.latencyMs} ms`
           }
           warn={metrics ? !metrics.postgres.ok : false}
         />
         <HealthCard
-          label="Held balance"
+          label={t("admin.heldBalance")}
           value={metrics ? formatTry(metrics.wallet.totalHeldBalance) : "—"}
           hint={
             metrics
-              ? `Available ${formatTry(metrics.wallet.totalAvailableBalance)}`
+              ? t("admin.availableHint", {
+                  amount: formatTry(metrics.wallet.totalAvailableBalance),
+                })
               : undefined
           }
         />
         <HealthCard
-          label="Live auctions"
+          label={t("admin.liveAuctions")}
           value={metrics ? String(metrics.auctions.liveCount) : "—"}
           hint={
-            metrics ? `${metrics.auctions.endingSoonCount} ending within 15m` : undefined
+            metrics
+              ? t("admin.endingSoon", { count: metrics.auctions.endingSoonCount })
+              : undefined
           }
         />
         <HealthCard
-          label="Queue failures"
+          label={t("admin.queueFailures")}
           value={metrics ? String(emailFailed + closerFailed) : "—"}
           hint={
             metrics
-              ? `email ${emailFailed} · closer ${closerFailed}`
+              ? t("admin.queueHint", { email: emailFailed, closer: closerFailed })
               : undefined
           }
           warn={emailFailed + closerFailed > 0}
         />
       </div>
 
-      <h2 className="mt-10 text-lg text-brass-400">Live auctions</h2>
+      <h2 className="mt-10 text-lg text-brass-400">{t("admin.liveSection")}</h2>
       <ul className="mt-3 space-y-2">
         {live.map((a) => (
           <li
@@ -221,7 +251,8 @@ export default function AdminPage() {
                 {a.title}
               </Link>
               <p className="text-mist-300">
-                {formatTry(a.currentBid)} · ends {new Date(a.endsAt).toLocaleString()}
+                {formatTry(a.currentBid)} · {t("admin.ends")}{" "}
+                {new Date(a.endsAt).toLocaleString(bcp47)}
               </p>
             </div>
             <button
@@ -229,14 +260,14 @@ export default function AdminPage() {
               className="border border-red-400/40 px-3 py-1.5 text-red-300 hover:bg-red-400/10"
               onClick={() => setForceTarget(a)}
             >
-              Force End / Cancel
+              {t("admin.forceEndCancel")}
             </button>
           </li>
         ))}
-        {live.length === 0 ? <li className="text-mist-300">No live auctions.</li> : null}
+        {live.length === 0 ? <li className="text-mist-300">{t("admin.noLive")}</li> : null}
       </ul>
 
-      <h2 className="mt-10 text-lg text-brass-400">Users</h2>
+      <h2 className="mt-10 text-lg text-brass-400">{t("admin.users")}</h2>
       <ul className="mt-3 space-y-2">
         {users.map((u) => (
           <li key={u.id} className="flex items-center justify-between border-b border-white/10 py-2 text-sm">
@@ -249,29 +280,29 @@ export default function AdminPage() {
               onClick={() => toggleStatus(u)}
               className="text-brass-400 hover:underline"
             >
-              Toggle status
+              {t("admin.toggleStatus")}
             </button>
           </li>
         ))}
       </ul>
 
-      <h2 className="mt-10 text-lg text-brass-400">Audit log</h2>
+      <h2 className="mt-10 text-lg text-brass-400">{t("admin.auditLog")}</h2>
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         <input
           className="border border-white/15 bg-ink-900 px-3 py-2 text-sm"
-          placeholder="Filter action"
+          placeholder={t("admin.filterAction")}
           value={filters.action}
           onChange={(e) => setFilters({ ...filters, action: e.target.value })}
         />
         <input
           className="border border-white/15 bg-ink-900 px-3 py-2 text-sm"
-          placeholder="Entity type"
+          placeholder={t("admin.entityType")}
           value={filters.entityType}
           onChange={(e) => setFilters({ ...filters, entityType: e.target.value })}
         />
         <input
           className="border border-white/15 bg-ink-900 px-3 py-2 text-sm"
-          placeholder="Actor id"
+          placeholder={t("admin.actorId")}
           value={filters.actorId}
           onChange={(e) => setFilters({ ...filters, actorId: e.target.value })}
         />
@@ -281,25 +312,25 @@ export default function AdminPage() {
         className="mt-2 text-sm text-brass-400 hover:underline"
         onClick={load}
       >
-        Apply filters
+        {t("admin.applyFilters")}
       </button>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="text-mist-300">
             <tr className="border-b border-white/10">
-              <th className="py-2 pr-3">Time</th>
-              <th className="py-2 pr-3">Actor</th>
-              <th className="py-2 pr-3">Action</th>
-              <th className="py-2 pr-3">Entity</th>
-              <th className="py-2 pr-3">IP</th>
-              <th className="py-2">Diff</th>
+              <th className="py-2 pr-3">{t("admin.time")}</th>
+              <th className="py-2 pr-3">{t("admin.actor")}</th>
+              <th className="py-2 pr-3">{t("admin.action")}</th>
+              <th className="py-2 pr-3">{t("admin.entity")}</th>
+              <th className="py-2 pr-3">{t("admin.ip")}</th>
+              <th className="py-2">{t("admin.diff")}</th>
             </tr>
           </thead>
           <tbody>
             {logs.map((l) => (
               <tr key={l.id} className="border-b border-white/5 align-top text-mist-100">
                 <td className="py-2 pr-3 whitespace-nowrap text-mist-300">
-                  {new Date(l.createdAt).toLocaleString()}
+                  {new Date(l.createdAt).toLocaleString(bcp47)}
                 </td>
                 <td className="py-2 pr-3 font-mono text-xs">{l.actorId?.slice(0, 8) ?? "—"}</td>
                 <td className="py-2 pr-3 text-brass-400">{l.action}</td>
@@ -321,10 +352,10 @@ export default function AdminPage() {
       {forceTarget ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-6 backdrop-blur-sm">
           <div className="w-full max-w-md border border-red-400/30 bg-ink-900 p-6">
-            <h3 className="font-display text-2xl text-mist-50">Emergency action</h3>
+            <h3 className="font-display text-2xl text-mist-50">{t("admin.emergency")}</h3>
             <p className="mt-2 text-sm text-mist-300">{forceTarget.title}</p>
             <label className="mt-4 block text-sm text-mist-300">
-              Mandatory reason (audit log)
+              {t("admin.reason")}
               <textarea
                 className="mt-1 w-full border border-white/15 bg-ink-950 px-3 py-2"
                 rows={4}
@@ -339,7 +370,7 @@ export default function AdminPage() {
                 onClick={() => confirmForce("end")}
                 className="bg-brass-500 px-3 py-2 text-sm font-semibold text-ink-950 disabled:opacity-50"
               >
-                Force end
+                {t("admin.forceEnd")}
               </button>
               <button
                 type="button"
@@ -347,7 +378,7 @@ export default function AdminPage() {
                 onClick={() => confirmForce("cancel")}
                 className="border border-red-400/50 px-3 py-2 text-sm text-red-300 disabled:opacity-50"
               >
-                Force cancel
+                {t("admin.forceCancel")}
               </button>
               <button
                 type="button"
@@ -357,7 +388,7 @@ export default function AdminPage() {
                   setForceReason("");
                 }}
               >
-                Dismiss
+                {t("admin.dismiss")}
               </button>
             </div>
           </div>

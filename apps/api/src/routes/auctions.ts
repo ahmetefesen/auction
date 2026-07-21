@@ -289,6 +289,27 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get<{ Params: { id: string } }>(
+    "/auctions/:id/proxy-bid",
+    { preHandler: [requireUuidParam(), requireBuyer] },
+    async (request) => {
+      const user = request.user;
+      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
+      if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
+      const proxy = await prisma.proxyBid.findUnique({
+        where: {
+          auctionId_bidderId: { auctionId: request.params.id, bidderId: user.id },
+        },
+      });
+      return {
+        auctionId: request.params.id,
+        maxAmountCents: proxy?.maxAmount ?? null,
+        updatedAt: proxy?.updatedAt.toISOString() ?? null,
+      };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
     "/auctions/:id/snapshot",
     { preHandler: [requireUuidParam(), optionalAuth] },
     async (request) => {

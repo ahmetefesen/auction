@@ -1,40 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useTransition } from "react";
 import { apiFetch } from "@/lib/api";
-
-type MeUser = {
-  id: string;
-  email: string;
-  displayName: string;
-  role: string;
-};
+import { useSession } from "@/lib/auth/session";
+import { useT } from "@/lib/i18n";
+import { formatTry } from "@/lib/format";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 export function SiteHeader() {
-  const pathname = usePathname();
-  const [user, setUser] = useState<MeUser | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const t = useT();
+  const { user, wallet, loaded, clear, isBuyer, isSeller, isAdmin } = useSession();
   const [pending, startTransition] = useTransition();
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    void apiFetch<{ user: MeUser }>("/me")
-      .then((res) => {
-        if (!cancelled) setUser(res.user);
-      })
-      .catch(() => {
-        if (!cancelled) setUser(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname]);
 
   function logout(): void {
     startTransition(async () => {
@@ -43,7 +20,7 @@ export function SiteHeader() {
       } catch {
         // still clear local UI
       }
-      setUser(null);
+      clear();
       window.location.href = "/";
     });
   }
@@ -54,25 +31,42 @@ export function SiteHeader() {
         <Link href="/" className="font-display text-2xl tracking-wide text-brass-400">
           Lotforge
         </Link>
-        <nav className="flex items-center gap-5 text-sm text-mist-300">
+        <nav className="flex flex-wrap items-center justify-end gap-4 text-sm text-mist-300 sm:gap-5">
           <Link href="/auctions" className="hover:text-mist-50">
-            Auctions
+            {t("nav.auctions")}
           </Link>
-          <Link href="/wallet" className="hover:text-mist-50">
-            Wallet
-          </Link>
-          <Link href="/seller" className="hover:text-mist-50">
-            Seller
-          </Link>
-          <Link href="/admin" className="hover:text-mist-50">
-            Admin
-          </Link>
+          {isBuyer ? (
+            <>
+              <Link href="/wallet" className="hover:text-mist-50">
+                {t("nav.wallet")}
+              </Link>
+              <Link href="/watchlist" className="hover:text-mist-50">
+                {t("nav.watchlist")}
+              </Link>
+            </>
+          ) : null}
+          {isSeller ? (
+            <Link href="/seller" className="hover:text-mist-50">
+              {t("nav.seller")}
+            </Link>
+          ) : null}
+          {isAdmin ? (
+            <Link href="/admin" className="hover:text-mist-50">
+              {t("nav.admin")}
+            </Link>
+          ) : null}
+          <LanguageSwitcher />
           {!loaded ? (
-            <span className="px-3 py-1.5 text-mist-300/50">…</span>
+            <span className="px-3 py-1.5 text-mist-300/50">{t("common.loading")}</span>
           ) : user ? (
             <div className="flex items-center gap-3">
               <span className="hidden text-mist-100 sm:inline">
-                Merhaba, <span className="text-brass-400">{user.displayName}</span>
+                {t("nav.hello")} <span className="text-brass-400">{user.displayName}</span>
+                {isBuyer && wallet ? (
+                  <span className="ml-2 text-xs text-mist-300">
+                    · {formatTry(wallet.availableBalance)}
+                  </span>
+                ) : null}
               </span>
               <button
                 type="button"
@@ -80,7 +74,7 @@ export function SiteHeader() {
                 onClick={logout}
                 className="rounded border border-white/20 px-3 py-1.5 text-mist-200 hover:bg-white/5 disabled:opacity-60"
               >
-                Sign out
+                {t("nav.signOut")}
               </button>
             </div>
           ) : (
@@ -88,7 +82,7 @@ export function SiteHeader() {
               href="/login"
               className="rounded border border-brass-500/60 px-3 py-1.5 text-brass-400 hover:bg-brass-500/10"
             >
-              Sign in
+              {t("nav.signIn")}
             </Link>
           )}
         </nav>

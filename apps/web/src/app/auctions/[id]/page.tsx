@@ -1,4 +1,5 @@
 import { AuctionRoom } from "@/components/AuctionRoom";
+import { AuctionNotFound } from "@/components/AuctionNotFound";
 import type { AuctionDto } from "@auction/shared";
 
 const API_URL = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:4000";
@@ -25,11 +26,7 @@ export default async function AuctionDetailPage({
   const { id } = await params;
   const auction = await fetchAuction(id);
   if (!auction) {
-    return (
-      <div className="mx-auto max-w-6xl px-6 py-20 text-mist-300">
-        Auction not found.
-      </div>
-    );
+    return <AuctionNotFound />;
   }
   return <AuctionRoom initial={auction} apiUrl={API_URL} />;
 }
