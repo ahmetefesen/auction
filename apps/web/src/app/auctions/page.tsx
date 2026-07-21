@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { AuctionDto } from "@auction/shared";
+import { FlashBanner } from "@/components/FlashBanner";
 import { formatTry } from "@/lib/format";
 
 const API_URL = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:4000";
@@ -25,6 +26,7 @@ export default async function AuctionsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
+      <FlashBanner />
       <h1 className="font-display text-4xl text-mist-50">Live auctions</h1>
       <p className="mt-2 text-mist-300">Active lots with real-time bidding.</p>
       <div className="mt-10 grid gap-6 md:grid-cols-2">

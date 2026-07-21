@@ -42,13 +42,16 @@ export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  const headers = new Headers(init?.headers);
+  // Fastify 5 rejects empty bodies when Content-Type is application/json
+  // (e.g. POST /auctions/:id/publish with no body).
+  if (init?.body !== undefined && init.body !== null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   const body: unknown = await response.json().catch(() => null);

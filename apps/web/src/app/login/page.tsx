@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { apiFetch } from "@/lib/api";
 
+type AuthUser = {
+  id: string;
+  displayName: string;
+  role: "BUYER" | "SELLER" | "ADMIN";
+};
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("buyer@auction.local");
@@ -17,11 +23,21 @@ export default function LoginPage() {
     startTransition(async () => {
       setError(null);
       try {
-        await apiFetch("/auth/login", {
+        const res = await apiFetch<{ user: AuthUser }>("/auth/login", {
           method: "POST",
           body: JSON.stringify({ email, password }),
         });
-        router.push("/auctions");
+        sessionStorage.setItem(
+          "lotforge_flash",
+          JSON.stringify({
+            kind: "signed_in",
+            name: res.user.displayName,
+          }),
+        );
+        const dest =
+          res.user.role === "SELLER" || res.user.role === "ADMIN" ? "/seller" : "/auctions";
+        router.push(dest);
+        router.refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Login failed");
       }
@@ -35,9 +51,11 @@ export default function LoginPage() {
         <label className="block text-sm text-mist-300">
           Email
           <input
+            type="email"
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            required
           />
         </label>
         <label className="block text-sm text-mist-300">
@@ -47,6 +65,7 @@ export default function LoginPage() {
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
           />
         </label>
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
@@ -55,7 +74,7 @@ export default function LoginPage() {
           disabled={pending}
           className="w-full bg-brass-500 py-2.5 font-semibold text-ink-950 disabled:opacity-60"
         >
-          Sign in
+          {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
       <p className="mt-4 text-sm text-mist-300">

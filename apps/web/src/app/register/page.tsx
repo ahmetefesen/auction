@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { apiFetch } from "@/lib/api";
 
+type AuthUser = {
+  id: string;
+  displayName: string;
+  role: "BUYER" | "SELLER" | "ADMIN";
+};
+
 export default function RegisterPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -19,11 +25,19 @@ export default function RegisterPage() {
     startTransition(async () => {
       setError(null);
       try {
-        await apiFetch("/auth/register", {
+        const res = await apiFetch<{ user: AuthUser }>("/auth/register", {
           method: "POST",
           body: JSON.stringify({ email, password, displayName, role }),
         });
-        router.push("/auctions");
+        sessionStorage.setItem(
+          "lotforge_flash",
+          JSON.stringify({
+            kind: "welcome",
+            name: res.user.displayName,
+          }),
+        );
+        router.push(res.user.role === "SELLER" ? "/seller" : "/auctions");
+        router.refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Registration failed");
       }
@@ -40,14 +54,17 @@ export default function RegisterPage() {
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
+            required
           />
         </label>
         <label className="block text-sm text-mist-300">
           Email
           <input
+            type="email"
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            required
           />
         </label>
         <label className="block text-sm text-mist-300">
@@ -57,7 +74,12 @@ export default function RegisterPage() {
             className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
           />
+          <span className="mt-1 block text-xs text-mist-300/70">
+            En az 8 karakter; büyük/küçük harf, rakam ve özel karakter
+          </span>
         </label>
         <label className="block text-sm text-mist-300">
           Role
@@ -76,7 +98,7 @@ export default function RegisterPage() {
           disabled={pending}
           className="w-full bg-brass-500 py-2.5 font-semibold text-ink-950 disabled:opacity-60"
         >
-          Register
+          {pending ? "Creating…" : "Register"}
         </button>
       </form>
       <p className="mt-4 text-sm text-mist-300">

@@ -34,7 +34,13 @@ export type LiveJob = {
   auctionTitle: string;
 };
 
-export type EmailJob = OutbidJob | WonJob | EndingSoonJob | LiveJob;
+export type WelcomeJob = {
+  type: "WELCOME";
+  userId: string;
+  displayName: string;
+};
+
+export type EmailJob = OutbidJob | WonJob | EndingSoonJob | LiveJob | WelcomeJob;
 
 const QUEUE_NAME = "email";
 
@@ -74,6 +80,10 @@ export class EmailQueue {
     await this.queue.add("live", { type: "live", ...data });
   }
 
+  async addWelcome(data: Omit<WelcomeJob, "type">): Promise<void> {
+    await this.queue.add("WELCOME", { type: "WELCOME", ...data });
+  }
+
   async close(): Promise<void> {
     await this.queue.close();
   }
@@ -104,6 +114,16 @@ export function startEmailWorker(env: Env): Worker<EmailJob> {
 
         const user = await prisma.user.findUnique({ where: { id: data.userId } });
         if (!user) return;
+
+        if (data.type === "WELCOME") {
+          await transporter.sendMail({
+            from: env.SMTP_FROM,
+            to: user.email,
+            subject: `Welcome to Lotforge, ${data.displayName}`,
+            text: `Hoş geldin ${data.displayName}!\n\nLotforge hesabın hazır. Canlı müzayedelere katılabilir, cüzdanını yönetebilir veya satıcıysan lot yayınlayabilirsin.\n\nİyi açık artırmalar,\nLotforge`,
+          });
+          return;
+        }
 
         if (data.type === "OUTBID") {
           await transporter.sendMail({

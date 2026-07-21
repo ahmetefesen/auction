@@ -29,6 +29,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     await auth.establishSession(reply, { id: user.id, role: user.role });
 
+    void app.emailQueue.addWelcome({ userId: user.id, displayName: user.displayName }).catch((err) => {
+      request.log.warn({ err }, "Failed to enqueue welcome email");
+    });
+
     return {
       user: {
         id: user.id,

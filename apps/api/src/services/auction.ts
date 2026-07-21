@@ -150,10 +150,14 @@ export async function publishAuction(
   });
 
   if (status === AuctionStatus.LIVE) {
-    await emailQueue.addAuctionLive({
-      auctionId: auction.id,
-      auctionTitle: auction.title,
-    });
+    try {
+      await emailQueue.addAuctionLive({
+        auctionId: auction.id,
+        auctionTitle: auction.title,
+      });
+    } catch {
+      // email is best-effort — never fail publish because of the queue
+    }
   }
 
   return toDto(auction, actorRole);

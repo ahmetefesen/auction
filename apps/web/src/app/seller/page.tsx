@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { AuctionDto } from "@auction/shared";
 import { apiFetch } from "@/lib/api";
 import { formatTry } from "@/lib/format";
+import { FlashBanner } from "@/components/FlashBanner";
 
 type WinnerInsights = {
   winner: { id: string; displayName: string; emailMasked: string };
@@ -15,6 +16,7 @@ type WinnerInsights = {
 export default function SellerPage() {
   const [items, setItems] = useState<AuctionDto[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [insights, setInsights] = useState<WinnerInsights | null>(null);
   const [insightsTitle, setInsightsTitle] = useState("");
@@ -44,23 +46,49 @@ export default function SellerPage() {
   function createAuction(): void {
     startTransition(async () => {
       setError(null);
+      setSuccess(null);
+      const title = form.title.trim();
+      const description = form.description.trim();
+      const startingPrice = Number.parseInt(form.startingPrice, 10);
+      const minIncrement = Number.parseInt(form.minIncrement, 10);
+      const durationHours = Number.parseInt(form.durationHours, 10);
+      if (title.length < 3) {
+        setError("Title must be at least 3 characters");
+        return;
+      }
+      if (!description) {
+        setError("Description is required");
+        return;
+      }
+      if (!Number.isFinite(startingPrice) || startingPrice <= 0) {
+        setError("Starting price must be a positive integer (cents)");
+        return;
+      }
+      if (!Number.isFinite(minIncrement) || minIncrement <= 0) {
+        setError("Min increment must be a positive integer (cents)");
+        return;
+      }
+      if (!Number.isFinite(durationHours) || durationHours <= 0) {
+        setError("Duration must be a positive number of hours");
+        return;
+      }
       try {
         const startsAt = new Date().toISOString();
-        const endsAt = new Date(
-          Date.now() + Number.parseInt(form.durationHours, 10) * 3600_000,
-        ).toISOString();
+        const endsAt = new Date(Date.now() + durationHours * 3600_000).toISOString();
         const created = await apiFetch<{ auction: AuctionDto }>("/auctions", {
           method: "POST",
           body: JSON.stringify({
-            title: form.title,
-            description: form.description,
-            startingPrice: Number.parseInt(form.startingPrice, 10),
-            minIncrement: Number.parseInt(form.minIncrement, 10),
+            title,
+            description,
+            startingPrice,
+            minIncrement,
             startsAt,
             endsAt,
           }),
         });
         await apiFetch(`/auctions/${created.auction.id}/publish`, { method: "POST" });
+        setForm({ ...form, title: "", description: "" });
+        setSuccess(`Published “${created.auction.title}”`);
         load();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Create failed");
@@ -83,9 +111,11 @@ export default function SellerPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-16">
+      <FlashBanner />
       <h1 className="font-display text-4xl text-mist-50">Seller desk</h1>
       <p className="mt-2 text-mist-300">Create lots and review settled winners.</p>
       {error ? <p className="mt-4 text-red-300">{error}</p> : null}
+      {success ? <p className="mt-4 text-brass-300">{success}</p> : null}
       <div className="mt-8 space-y-3">
         <input
           className="w-full border border-white/15 bg-ink-900 px-3 py-2"

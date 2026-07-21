@@ -107,6 +107,20 @@ export async function buildApp(input: {
       });
     }
 
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "FST_ERR_CTP_EMPTY_JSON_BODY"
+    ) {
+      return reply.status(400).send({
+        error: {
+          code: "EMPTY_BODY",
+          message: "Request body required for application/json",
+        },
+      });
+    }
+
     // Zod
     if (error instanceof ZodError) {
       return reply.status(400).send({
