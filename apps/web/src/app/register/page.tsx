@@ -10,7 +10,7 @@ import { useFormatApiError } from "@/lib/use-format-api-error";
 type AuthUser = {
   id: string;
   displayName: string;
-  role: "BUYER" | "SELLER" | "ADMIN";
+  roles: Array<"BUYER" | "SELLER" | "ADMIN">;
 };
 
 export default function RegisterPage() {
@@ -20,18 +20,26 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [role, setRole] = useState<"BUYER" | "SELLER">("BUYER");
+  const [asBuyer, setAsBuyer] = useState(true);
+  const [asSeller, setAsSeller] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function onSubmit(e: React.FormEvent): void {
     e.preventDefault();
+    const roles: Array<"BUYER" | "SELLER"> = [];
+    if (asBuyer) roles.push("BUYER");
+    if (asSeller) roles.push("SELLER");
+    if (roles.length === 0) {
+      setError(t("auth.rolesRequired"));
+      return;
+    }
     startTransition(async () => {
       setError(null);
       try {
         const res = await apiFetch<{ user: AuthUser }>("/auth/register", {
           method: "POST",
-          body: JSON.stringify({ email, password, displayName, role }),
+          body: JSON.stringify({ email, password, displayName, roles }),
         });
         sessionStorage.setItem(
           "lotforge_flash",
@@ -40,7 +48,7 @@ export default function RegisterPage() {
             name: res.user.displayName,
           }),
         );
-        router.push(res.user.role === "SELLER" ? "/seller" : "/auctions");
+        router.push(res.user.roles.includes("SELLER") ? "/seller" : "/auctions");
         router.refresh();
       } catch (err) {
         setError(formatError(err));
@@ -83,17 +91,26 @@ export default function RegisterPage() {
           />
           <span className="mt-1 block text-xs text-mist-300/70">{t("auth.passwordHint")}</span>
         </label>
-        <label className="block text-sm text-mist-300">
-          {t("auth.role")}
-          <select
-            className="mt-1 w-full border border-white/15 bg-ink-900 px-3 py-2"
-            value={role}
-            onChange={(e) => setRole(e.target.value === "SELLER" ? "SELLER" : "BUYER")}
-          >
-            <option value="BUYER">{t("auth.buyer")}</option>
-            <option value="SELLER">{t("auth.seller")}</option>
-          </select>
-        </label>
+        <fieldset className="space-y-2 text-sm text-mist-300">
+          <legend>{t("auth.roles")}</legend>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={asBuyer}
+              onChange={(e) => setAsBuyer(e.target.checked)}
+            />
+            {t("auth.buyer")}
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={asSeller}
+              onChange={(e) => setAsSeller(e.target.checked)}
+            />
+            {t("auth.seller")}
+          </label>
+          <p className="text-xs text-mist-300/70">{t("auth.rolesHint")}</p>
+        </fieldset>
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
         <button
           type="submit"

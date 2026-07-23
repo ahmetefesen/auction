@@ -1,6 +1,7 @@
 import {
   prisma,
   AuctionStatus,
+  AuctionEventType,
   Prisma,
   lockAuctionById,
   lockWalletsByUserIds,
@@ -13,6 +14,7 @@ import { AppError } from "../lib/errors.js";
 import { walletService } from "./wallet.js";
 import type { EventBus } from "../realtime/event-bus.js";
 import type { EmailQueue } from "../queues/email.js";
+import { recordAuctionEvent } from "./auction-events.js";
 
 export type PlaceBidResult = {
   auction: LockedAuction;
@@ -282,29 +284,59 @@ export class BiddingService {
           outcome.visibleBid,
         );
 
-        // 6. Insert bid(s) + update auction
+        // 6. Insert bid(s) + update auction + timeline events
+        const existingBidCount = await tx.bid.count({ where: { auctionId: auction.id } });
+        let sequenceNo = existingBidCount;
+        const bidAt = new Date();
+        const elapsed = Math.max(
+          0,
+          Math.floor((bidAt.getTime() - auction.startsAt.getTime()) / 1000),
+        );
+        const remaining = Math.max(
+          0,
+          Math.floor((endsAt.getTime() - bidAt.getTime()) / 1000),
+        );
+
         let lastBidId = "";
-        for (const b of outcome.bidsToRecord) {
+        const bidsToWrite =
+          outcome.bidsToRecord.length > 0
+            ? outcome.bidsToRecord
+            : [
+                {
+                  bidderId: input.bidderId,
+                  amount: input.amountCents,
+                  isProxy: false,
+                },
+              ];
+
+        for (const b of bidsToWrite) {
+          sequenceNo += 1;
           const created = await tx.bid.create({
             data: {
               auctionId: auction.id,
               bidderId: b.bidderId,
               amount: b.amount,
               isProxy: b.isProxy,
+              sequenceNo,
+              elapsedSecFromStart: elapsed,
+              remainingSecAtBid: remaining,
             },
           });
           lastBidId = created.id;
-        }
-        if (!lastBidId) {
-          const created = await tx.bid.create({
-            data: {
-              auctionId: auction.id,
-              bidderId: input.bidderId,
-              amount: input.amountCents,
-              isProxy: false,
+          await recordAuctionEvent(tx, {
+            auctionId: auction.id,
+            type: AuctionEventType.BID_PLACED,
+            actorUserId: b.bidderId,
+            payload: {
+              bidId: created.id,
+              amountCents: b.amount,
+              isProxy: b.isProxy,
+              sequenceNo,
+              remainingSecAtBid: remaining,
             },
+            startsAt: auction.startsAt,
+            at: bidAt,
           });
-          lastBidId = created.id;
         }
 
         const updated = await tx.auction.update({
@@ -316,6 +348,21 @@ export class BiddingService {
             version: { increment: 1 },
           },
         });
+
+        if (extended) {
+          await recordAuctionEvent(tx, {
+            auctionId: auction.id,
+            type: AuctionEventType.EXTENDED,
+            actorUserId: input.bidderId,
+            payload: {
+              previousEndsAt: auction.endsAt.toISOString(),
+              endsAt: endsAt.toISOString(),
+              extendedBySec: auction.antiSnipeExtendSec,
+            },
+            startsAt: auction.startsAt,
+            at: bidAt,
+          });
+        }
 
         if (input.idempotencyKey) {
           await tx.bidIdempotency.create({
@@ -354,6 +401,7 @@ export class BiddingService {
       auctionId: result.auction.id,
       bidId: result.bidId,
       bidderId: input.bidderId,
+      sellerId: result.auction.sellerId,
       amountCents: result.auction.currentBid,
       currentBidCents: result.auction.currentBid,
       currentWinnerId: result.auction.currentWinnerId,

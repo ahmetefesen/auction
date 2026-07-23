@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { Redis } from "ioredis";
-import { auctionRoom, userRoom } from "@auction/shared";
+import { Role, hasAnyRole, auctionRoom, userRoom, sellerRoom } from "@auction/shared";
 import type { Env } from "../config/env.js";
 import { verifyAccessToken, ACCESS_COOKIE } from "../lib/auth-tokens.js";
 
@@ -44,26 +44,31 @@ export async function createSocketServer(
       const token = cookies[ACCESS_COOKIE];
       if (!token) {
         socket.data.userId = null;
-        socket.data.role = null;
+        socket.data.roles = null;
         next();
         return;
       }
       const payload = await verifyAccessToken(env, token);
       socket.data.userId = payload.sub;
-      socket.data.role = payload.role;
+      socket.data.roles = payload.roles;
       next();
     } catch {
       // Invalid token — still allow guest connection
       socket.data.userId = null;
-      socket.data.role = null;
+      socket.data.roles = null;
       next();
     }
   });
 
   io.on("connection", (socket) => {
     const userId = socket.data.userId;
+    const roles = socket.data.roles as import("@auction/shared").Role[] | null;
     if (typeof userId === "string") {
       void socket.join(userRoom(userId));
+      // Sellers (and admins) receive bid.placed on their desk via seller:{id}
+      if (Array.isArray(roles) && hasAnyRole(roles, Role.SELLER, Role.ADMIN)) {
+        void socket.join(sellerRoom(userId));
+      }
     }
 
     socket.on("auction:join", (auctionId: unknown) => {

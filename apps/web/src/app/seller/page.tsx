@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import type { AuctionDto } from "@auction/shared";
 import { API_URL, apiFetch } from "@/lib/api";
@@ -8,6 +8,7 @@ import { useSession } from "@/lib/auth/session";
 import { formatTry } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useFormatApiError } from "@/lib/use-format-api-error";
+import { useSellerLive } from "@/lib/use-seller-live";
 import { FlashBanner } from "@/components/FlashBanner";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -21,7 +22,7 @@ type WinnerInsights = {
 export default function SellerPage() {
   const t = useT();
   const formatError = useFormatApiError();
-  const { loaded, isSeller } = useSession();
+  const { loaded, isSeller, user } = useSession();
   const [items, setItems] = useState<AuctionDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -51,6 +52,31 @@ export default function SellerPage() {
     if (!loaded || !isSeller) return;
     load();
   }, [loaded, isSeller]);
+
+  const onLiveBid = useCallback(
+    (update: {
+      auctionId: string;
+      currentBidCents: number;
+      currentWinnerId: string | null;
+      endsAt: string;
+    }) => {
+      setItems((prev) =>
+        prev.map((a) =>
+          a.id === update.auctionId
+            ? {
+                ...a,
+                currentBid: update.currentBidCents,
+                currentWinnerId: update.currentWinnerId,
+                endsAt: update.endsAt,
+              }
+            : a,
+        ),
+      );
+    },
+    [],
+  );
+
+  useSellerLive(isSeller && user ? user.id : null, onLiveBid);
 
   if (loaded && !isSeller) {
     return (

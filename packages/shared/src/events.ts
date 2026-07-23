@@ -15,6 +15,7 @@ export const bidPlacedPayloadSchema = z.object({
   auctionId: z.string().uuid(),
   bidId: z.string().uuid(),
   bidderId: z.string().uuid(),
+  sellerId: z.string().uuid(),
   amountCents: z.number().int().nonnegative(),
   currentBidCents: z.number().int().nonnegative(),
   currentWinnerId: z.string().uuid().nullable(),
@@ -72,4 +73,8 @@ export function auctionRoom(auctionId: string): string {
 
 export function userRoom(userId: string): string {
   return `user:${userId}`;
+}
+
+export function sellerRoom(sellerId: string): string {
+  return `seller:${sellerId}`;
 }

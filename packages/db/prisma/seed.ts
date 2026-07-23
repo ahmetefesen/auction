@@ -3,6 +3,40 @@ import { PrismaClient, Role, AuctionStatus } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
+async function ensureRoles(
+  userId: string,
+  roles: Array<(typeof Role)[keyof typeof Role]>,
+): Promise<void> {
+  for (const role of roles) {
+    await prisma.userRole.upsert({
+      where: { userId_role: { userId, role } },
+      create: { userId, role },
+      update: {},
+    });
+  }
+  if (roles.includes(Role.SELLER)) {
+    await prisma.sellerProfile.upsert({
+      where: { userId },
+      create: { userId, storeName: "Demo Seller Store" },
+      update: {},
+    });
+  }
+  if (roles.includes(Role.BUYER)) {
+    await prisma.buyerProfile.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
+  }
+  if (roles.includes(Role.ADMIN)) {
+    await prisma.adminProfile.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
+  }
+}
+
 async function main(): Promise<void> {
   const passwordHash = await argon2.hash("Password123!", {
     type: argon2.argon2id,
@@ -15,10 +49,10 @@ async function main(): Promise<void> {
       email: "admin@auction.local",
       passwordHash,
       displayName: "Admin",
-      role: Role.ADMIN,
       wallet: { create: {} },
     },
   });
+  await ensureRoles(admin.id, [Role.ADMIN]);
 
   const seller = await prisma.user.upsert({
     where: { email: "seller@auction.local" },
@@ -27,10 +61,11 @@ async function main(): Promise<void> {
       email: "seller@auction.local",
       passwordHash,
       displayName: "Demo Seller",
-      role: Role.SELLER,
       wallet: { create: {} },
     },
   });
+  // Demo seller can also buy elsewhere
+  await ensureRoles(seller.id, [Role.SELLER, Role.BUYER]);
 
   const buyer = await prisma.user.upsert({
     where: { email: "buyer@auction.local" },
@@ -39,7 +74,6 @@ async function main(): Promise<void> {
       email: "buyer@auction.local",
       passwordHash,
       displayName: "Demo Buyer",
-      role: Role.BUYER,
       wallet: {
         create: {
           availableBalance: 500_000,
@@ -48,6 +82,7 @@ async function main(): Promise<void> {
       },
     },
   });
+  await ensureRoles(buyer.id, [Role.BUYER]);
 
   const buyer2 = await prisma.user.upsert({
     where: { email: "buyer2@auction.local" },
@@ -56,7 +91,6 @@ async function main(): Promise<void> {
       email: "buyer2@auction.local",
       passwordHash,
       displayName: "Demo Buyer 2",
-      role: Role.BUYER,
       wallet: {
         create: {
           availableBalance: 500_000,
@@ -65,6 +99,7 @@ async function main(): Promise<void> {
       },
     },
   });
+  await ensureRoles(buyer2.id, [Role.BUYER]);
 
   const startsAt = new Date(Date.now() - 60_000);
   const endsAt = new Date(Date.now() + 60 * 60_000);

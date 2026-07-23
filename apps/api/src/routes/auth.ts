@@ -5,6 +5,7 @@ import { REFRESH_COOKIE } from "../lib/auth-tokens.js";
 import { AppError } from "../lib/errors.js";
 import { requireAuth } from "../plugins/auth.js";
 import { AuthService } from "../services/auth.js";
+import { assignRolesAndProfiles, toPublicUser } from "../lib/user-roles.js";
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const auth = new AuthService(app.env);
@@ -21,33 +22,35 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         email: body.email,
         passwordHash,
         displayName: body.displayName,
-        role: body.role,
         status: UserStatus.ACTIVE,
         wallet: { create: {} },
       },
     });
 
-    await auth.establishSession(reply, { id: user.id, role: user.role });
+    await assignRolesAndProfiles(user.id, body.roles);
+    const withRoles = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      include: { roles: true },
+    });
+
+    await auth.establishSession(reply, {
+      id: user.id,
+      roles: withRoles.roles.map((r) => r.role),
+    });
 
     void app.emailQueue.addWelcome({ userId: user.id, displayName: user.displayName }).catch((err) => {
       request.log.warn({ err }, "Failed to enqueue welcome email");
     });
 
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        role: user.role,
-        status: user.status,
-        createdAt: user.createdAt.toISOString(),
-      },
-    };
+    return { user: toPublicUser(withRoles) };
   });
 
   app.post("/auth/login", async (request, reply) => {
     const body = LoginSchema.parse(request.body);
-    const user = await prisma.user.findUnique({ where: { email: body.email } });
+    const user = await prisma.user.findUnique({
+      where: { email: body.email },
+      include: { roles: true },
+    });
     if (!user || !(await auth.verifyPassword(user.passwordHash, body.password))) {
       throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password");
     }
@@ -55,18 +58,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError(403, "SUSPENDED", "Account suspended");
     }
 
-    await auth.establishSession(reply, { id: user.id, role: user.role });
+    const roles = user.roles.map((r) => r.role);
+    if (roles.length === 0) {
+      throw new AppError(403, "FORBIDDEN", "User has no roles assigned");
+    }
 
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        role: user.role,
-        status: user.status,
-        createdAt: user.createdAt.toISOString(),
-      },
-    };
+    await auth.establishSession(reply, { id: user.id, roles });
+
+    return { user: toPublicUser(user) };
   });
 
   app.post("/auth/refresh", async (request, reply) => {
@@ -90,17 +89,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     const full = await prisma.user.findUniqueOrThrow({
       where: { id: user.id },
-      include: { wallet: true },
+      include: { wallet: true, roles: true },
     });
     return {
-      user: {
-        id: full.id,
-        email: full.email,
-        displayName: full.displayName,
-        role: full.role,
-        status: full.status,
-        createdAt: full.createdAt.toISOString(),
-      },
+      user: toPublicUser(full),
       wallet: full.wallet
         ? {
             availableBalance: full.wallet.availableBalance,

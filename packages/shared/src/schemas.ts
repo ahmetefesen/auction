@@ -32,12 +32,37 @@ export const positiveMoneyCentsSchema = z
 
 // --- Auth ---
 
-export const RegisterSchema = z.object({
-  email: emailSchema,
-  password: strongPasswordSchema,
-  role: z.enum([Role.SELLER, Role.BUYER]),
-  displayName: z.string().min(1).max(100),
-});
+const registerableRoleSchema = z.enum([Role.SELLER, Role.BUYER]);
+
+export const RegisterSchema = z
+  .object({
+    email: emailSchema,
+    password: strongPasswordSchema,
+    displayName: z.string().min(1).max(100),
+    /** Preferred: one or both of SELLER / BUYER */
+    roles: z.array(registerableRoleSchema).min(1).max(2).optional(),
+    /** @deprecated Prefer `roles` — still accepted for single-role clients */
+    role: registerableRoleSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.roles?.length && !data.role) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide roles[] or role",
+        path: ["roles"],
+      });
+    }
+  })
+  .transform((data) => {
+    const raw = data.roles?.length ? data.roles : data.role ? [data.role] : [];
+    const roles = [...new Set(raw)] as Array<"SELLER" | "BUYER">;
+    return {
+      email: data.email,
+      password: data.password,
+      displayName: data.displayName,
+      roles,
+    };
+  });
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 /** @deprecated Use RegisterSchema */
 export const registerSchema = RegisterSchema;

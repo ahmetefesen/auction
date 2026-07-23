@@ -1,5 +1,11 @@
-import { prisma, AuctionStatus, lockAuctionById, lockWalletsByUserIds } from "@auction/db";
-import type { Auction, Role } from "@auction/db";
+import {
+  prisma,
+  AuctionStatus,
+  AuctionEventType,
+  lockAuctionById,
+  lockWalletsByUserIds,
+} from "@auction/db";
+import type { Auction } from "@auction/db";
 import {
   AuctionStatus as SharedAuctionStatus,
   type AuctionDto,
@@ -7,20 +13,24 @@ import {
   type CreateAuctionInput,
   type UpdateAuctionInput,
   Role as SharedRole,
+  hasAnyRole,
+  hasRole,
+  type Role,
 } from "@auction/shared";
 import { AppError } from "../lib/errors.js";
 import { walletService } from "./wallet.js";
 import type { EventBus } from "../realtime/event-bus.js";
 import { RealtimeEvent } from "@auction/shared";
 import type { EmailQueue } from "../queues/email.js";
+import { recordAuctionEvent } from "./auction-events.js";
 
 function toDto(
   auction: Auction & { images?: Array<{ id: string; url: string; sortOrder: number }> },
-  viewerRole: Role | null,
+  viewerRoles: readonly Role[] | null,
 ): AuctionDto {
-  const showReserve =
-    viewerRole === SharedRole.ADMIN ||
-    (viewerRole === SharedRole.SELLER);
+  const showReserve = Boolean(
+    viewerRoles && hasAnyRole(viewerRoles, SharedRole.ADMIN, SharedRole.SELLER),
+  );
   return {
     id: auction.id,
     sellerId: auction.sellerId,
@@ -85,20 +95,20 @@ export async function createAuction(sellerId: string, input: CreateAuctionInput)
     },
     include: { images: true },
   });
-  return toDto(auction, SharedRole.SELLER);
+  return toDto(auction, [SharedRole.SELLER]);
 }
 
 export async function updateAuction(
   auctionId: string,
   actorId: string,
-  actorRole: Role,
+  actorRoles: readonly Role[],
   input: UpdateAuctionInput,
 ): Promise<AuctionDto> {
   const existing = await prisma.auction.findUnique({ where: { id: auctionId }, include: { images: true } });
   if (!existing) {
     throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
   }
-  if (existing.sellerId !== actorId && actorRole !== SharedRole.ADMIN) {
+  if (existing.sellerId !== actorId && !hasRole(actorRoles, SharedRole.ADMIN)) {
     throw new AppError(403, "FORBIDDEN", "Not auction owner");
   }
   if (existing.status !== AuctionStatus.DRAFT && existing.status !== AuctionStatus.SCHEDULED) {
@@ -119,20 +129,20 @@ export async function updateAuction(
     },
     include: { images: true },
   });
-  return toDto(auction, actorRole);
+  return toDto(auction, actorRoles);
 }
 
 export async function publishAuction(
   auctionId: string,
   actorId: string,
-  actorRole: Role,
+  actorRoles: readonly Role[],
   emailQueue: EmailQueue,
 ): Promise<AuctionDto> {
   const existing = await prisma.auction.findUnique({ where: { id: auctionId }, include: { images: true } });
   if (!existing) {
     throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
   }
-  if (existing.sellerId !== actorId && actorRole !== SharedRole.ADMIN) {
+  if (existing.sellerId !== actorId && !hasRole(actorRoles, SharedRole.ADMIN)) {
     throw new AppError(403, "FORBIDDEN", "Not auction owner");
   }
   if (existing.status !== AuctionStatus.DRAFT && existing.status !== AuctionStatus.SCHEDULED) {
@@ -160,22 +170,22 @@ export async function publishAuction(
     }
   }
 
-  return toDto(auction, actorRole);
+  return toDto(auction, actorRoles);
 }
 
-export async function cancelAuction(auctionId: string, actorId: string, actorRole: Role): Promise<AuctionDto> {
+export async function cancelAuction(auctionId: string, actorId: string, actorRoles: readonly Role[]): Promise<AuctionDto> {
   const result = await prisma.$transaction(async (tx) => {
     const auction = await lockAuctionById(tx, auctionId);
     if (!auction) {
       throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
     }
-    if (auction.sellerId !== actorId && actorRole !== SharedRole.ADMIN) {
+    if (auction.sellerId !== actorId && !hasRole(actorRoles, SharedRole.ADMIN)) {
       throw new AppError(403, "FORBIDDEN", "Not auction owner");
     }
     const cancellable =
       auction.status === AuctionStatus.DRAFT ||
       auction.status === AuctionStatus.SCHEDULED ||
-      (actorRole === SharedRole.ADMIN && auction.status === AuctionStatus.LIVE);
+      (hasRole(actorRoles, SharedRole.ADMIN) && auction.status === AuctionStatus.LIVE);
     if (!cancellable) {
       throw new AppError(400, "NOT_CANCELLABLE", "Auction cannot be cancelled");
     }
@@ -201,10 +211,10 @@ export async function cancelAuction(auctionId: string, actorId: string, actorRol
       include: { images: true },
     });
   });
-  return toDto(result, actorRole);
+  return toDto(result, actorRoles);
 }
 
-export async function getAuction(auctionId: string, viewerRole: Role | null): Promise<AuctionDto> {
+export async function getAuction(auctionId: string, viewerRoles: readonly Role[] | null): Promise<AuctionDto> {
   const auction = await prisma.auction.findUnique({
     where: { id: auctionId },
     include: { images: { orderBy: { sortOrder: "asc" } } },
@@ -212,14 +222,14 @@ export async function getAuction(auctionId: string, viewerRole: Role | null): Pr
   if (!auction) {
     throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
   }
-  return toDto(auction, viewerRole);
+  return toDto(auction, viewerRoles);
 }
 
 export async function listAuctions(input: {
   status?: string;
   page: number;
   pageSize: number;
-  viewerRole: Role | null;
+  viewerRoles: readonly Role[] | null;
   sellerId?: string;
 }): Promise<{ items: AuctionDto[]; total: number }> {
   const where = {
@@ -238,7 +248,7 @@ export async function listAuctions(input: {
   ]);
   return {
     total,
-    items: rows.map((r) => toDto(r, input.viewerRole)),
+    items: rows.map((r) => toDto(r, input.viewerRoles)),
   };
 }
 
@@ -285,6 +295,9 @@ export async function getAuctionSnapshot(
       bidderId: b.bidderId,
       amount: b.amount,
       isProxy: b.isProxy,
+      sequenceNo: b.sequenceNo,
+      elapsedSecFromStart: b.elapsedSecFromStart,
+      remainingSecAtBid: b.remainingSecAtBid,
       createdAt: b.createdAt.toISOString(),
     })),
     wallet: walletRow
@@ -329,6 +342,12 @@ export async function endAndSettleAuction(
           version: { increment: 1 },
         },
       });
+      await recordAuctionEvent(tx, {
+        auctionId: auction.id,
+        type: AuctionEventType.STATUS_CHANGED,
+        payload: { from: AuctionStatus.LIVE, to: AuctionStatus.ENDED, reason: "no_bids" },
+        startsAt: auction.startsAt,
+      });
       return {
         kind: "ended" as const,
         auction: ended,
@@ -348,6 +367,16 @@ export async function endAndSettleAuction(
           counterOfferCents: null,
           version: { increment: 1 },
         },
+      });
+      await recordAuctionEvent(tx, {
+        auctionId: auction.id,
+        type: AuctionEventType.NEGOTIATING,
+        actorUserId: auction.currentWinnerId,
+        payload: {
+          currentBidCents: auction.currentBid,
+          negotiationExpiresAt: negotiationExpiresAt.toISOString(),
+        },
+        startsAt: auction.startsAt,
       });
       return {
         kind: "negotiating" as const,
@@ -380,6 +409,13 @@ export async function endAndSettleAuction(
         status: AuctionStatus.SETTLED,
         version: { increment: 1 },
       },
+    });
+    await recordAuctionEvent(tx, {
+      auctionId: auction.id,
+      type: AuctionEventType.SETTLED,
+      actorUserId: auction.currentWinnerId,
+      payload: { amountCents: auction.currentBid, winnerId: auction.currentWinnerId },
+      startsAt: auction.startsAt,
     });
     return {
       kind: "settled" as const,

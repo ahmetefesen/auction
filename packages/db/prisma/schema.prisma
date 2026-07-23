@@ -37,17 +37,29 @@ enum WalletTxType {
   WITHDRAW
 }
 
+/// Append-only domain timeline for analytics / mining (separate from realtime fan-out)
+enum AuctionEventType {
+  BID_PLACED
+  EXTENDED
+  STATUS_CHANGED
+  SETTLED
+  NEGOTIATING
+}
+
 model User {
   id           String     @id @default(uuid()) @db.Uuid
   email        String     @unique @db.VarChar(255)
   /// Argon2id hash — never store plaintext passwords
   passwordHash String     @db.VarChar(255)
   displayName  String     @db.VarChar(100)
-  role         Role
   status       UserStatus @default(ACTIVE)
   createdAt    DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
 
+  roles         UserRole[]
+  sellerProfile SellerProfile?
+  buyerProfile  BuyerProfile?
+  adminProfile  AdminProfile?
   wallet        Wallet?
   auctions      Auction[]      @relation("SellerAuctions")
   bids          Bid[]
@@ -56,8 +68,52 @@ model User {
   watchlist     Watchlist[]
   auditLogs     AuditLog[]
   refreshTokens RefreshToken[]
+  auctionEvents AuctionEvent[]
 
-  @@index([role, status])
+  @@index([status])
+}
+
+/// Multi-role: same user may be BUYER + SELLER (+ ADMIN via seed/admin)
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  role      Role
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([role])
+}
+
+model SellerProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  storeName String?  @db.VarChar(120)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BuyerProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AdminProfile {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @unique @db.Uuid
+  /// Extensible permission flags for future fine-grained admin RBAC
+  permissions Json     @default("{}")
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 /// Auth infrastructure — JWT refresh rotation
@@ -140,6 +196,7 @@ model Auction {
   bids          Bid[]
   proxyBids     ProxyBid[]
   watchlist     Watchlist[]
+  events        AuctionEvent[]
 
   @@index([status, endsAt])
   @@index([status, negotiationExpiresAt])
@@ -162,18 +219,43 @@ model AuctionImage {
 
 /// Append-only bid history — application must never update/delete rows
 model Bid {
-  id        String   @id @default(uuid()) @db.Uuid
-  auctionId String   @db.Uuid
-  bidderId  String   @db.Uuid
-  amount    Int
-  isProxy   Boolean  @default(false)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id                  String   @id @default(uuid()) @db.Uuid
+  auctionId           String   @db.Uuid
+  bidderId            String   @db.Uuid
+  amount              Int
+  isProxy             Boolean  @default(false)
+  /// 1-based order within the auction (analytics)
+  sequenceNo          Int
+  /// Seconds since auction.startsAt at bid time
+  elapsedSecFromStart Int
+  /// Seconds remaining until endsAt snapshot at bid time (anti-snipe aware)
+  remainingSecAtBid   Int
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
 
   auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   bidder  User    @relation(fields: [bidderId], references: [id])
 
+  @@unique([auctionId, sequenceNo])
   @@index([auctionId, createdAt])
   @@index([bidderId])
+}
+
+/// Append-only auction timeline for mining / reconstruction
+model AuctionEvent {
+  id                  String           @id @default(uuid()) @db.Uuid
+  auctionId           String           @db.Uuid
+  type                AuctionEventType
+  actorUserId         String?          @db.Uuid
+  payload             Json?
+  elapsedSecFromStart Int?
+  createdAt           DateTime         @default(now()) @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([auctionId, createdAt])
+  @@index([type, createdAt])
+  @@index([actorUserId])
 }
 
 model ProxyBid {

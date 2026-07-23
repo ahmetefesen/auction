@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as argon2 from "argon2";
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
-import { Role } from "@auction/shared";
+import { Role, sortRoles, type Role as RoleType } from "@auction/shared";
 import type { Env } from "../config/env.js";
 import { AppError } from "./errors.js";
 
 export type AccessTokenPayload = {
   sub: string;
-  role: Role;
+  roles: RoleType[];
   typ: "access";
 };
 
@@ -74,8 +74,33 @@ export function generateRefreshToken(): string {
   return randomBytes(48).toString("base64url");
 }
 
-export async function signAccessToken(env: Env, userId: string, role: Role): Promise<string> {
-  return new SignJWT({ role, typ: "access" } satisfies Omit<AccessTokenPayload, "sub">)
+function isRole(value: unknown): value is RoleType {
+  return value === Role.ADMIN || value === Role.SELLER || value === Role.BUYER;
+}
+
+function parseRolesClaim(payload: JWTPayload): RoleType[] | null {
+  const rolesRaw = payload["roles"];
+  if (Array.isArray(rolesRaw) && rolesRaw.length > 0 && rolesRaw.every(isRole)) {
+    return sortRoles(rolesRaw);
+  }
+  // Legacy single-role tokens (pre multi-role migration)
+  const role = payload["role"];
+  if (isRole(role)) {
+    return [role];
+  }
+  return null;
+}
+
+export async function signAccessToken(
+  env: Env,
+  userId: string,
+  roles: readonly RoleType[],
+): Promise<string> {
+  const normalized = sortRoles(roles);
+  if (normalized.length === 0) {
+    throw new Error("Access token requires at least one role");
+  }
+  return new SignJWT({ roles: normalized, typ: "access" } satisfies Omit<AccessTokenPayload, "sub">)
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
     .setIssuedAt()
@@ -96,10 +121,6 @@ export async function signRefreshJwt(
     .sign(secretKey(env.JWT_REFRESH_SECRET));
 }
 
-function isRole(value: unknown): value is Role {
-  return value === Role.ADMIN || value === Role.SELLER || value === Role.BUYER;
-}
-
 export async function verifyAccessToken(env: Env, token: string): Promise<AccessTokenPayload> {
   let payload: JWTPayload;
   try {
@@ -110,12 +131,12 @@ export async function verifyAccessToken(env: Env, token: string): Promise<Access
   }
 
   const sub = payload.sub;
-  const role = payload["role"];
   const typ = payload["typ"];
-  if (typeof sub !== "string" || !isRole(role) || typ !== "access") {
+  const roles = parseRolesClaim(payload);
+  if (typeof sub !== "string" || !roles || typ !== "access") {
     throw new AppError(401, "UNAUTHORIZED", "Invalid access token payload");
   }
-  return { sub, role, typ: "access" };
+  return { sub, roles, typ: "access" };
 }
 
 export async function verifyRefreshJwt(env: Env, token: string): Promise<RefreshTokenPayload> {

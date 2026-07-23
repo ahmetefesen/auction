@@ -14,6 +14,7 @@ import {
   PlaceBidSchema,
   CounterOfferSchema,
 } from "@auction/shared";
+import { hasRole, Role } from "@auction/shared";
 import { AppError } from "../lib/errors.js";
 import { requireBuyer, requireSeller, optionalAuth, requireAuth } from "../plugins/auth.js";
 import { requireUuidParam } from "../plugins/validate-params.js";
@@ -53,12 +54,12 @@ async function assertBidRateLimit(
 export async function auctionRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auctions", { preHandler: optionalAuth }, async (request) => {
     const query = auctionListQuerySchema.parse(request.query);
-    const viewerRole = request.user?.role ?? null;
+    const viewerRoles = request.user?.roles ?? null;
     return listAuctions({
       status: query.status,
       page: query.page,
       pageSize: query.pageSize,
-      viewerRole,
+      viewerRoles,
     });
   });
 
@@ -66,8 +67,8 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
     "/auctions/:id",
     { preHandler: [requireUuidParam(), optionalAuth] },
     async (request) => {
-    const viewerRole = request.user?.role ?? null;
-    return getAuction(request.params.id, viewerRole);
+    const viewerRoles = request.user?.roles ?? null;
+    return getAuction(request.params.id, viewerRoles);
   });
 
   app.post("/auctions", { preHandler: requireSeller }, async (request) => {
@@ -94,8 +95,8 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
     const user = request.user;
     if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
     const body = updateAuctionSchema.parse(request.body);
-    const before = await getAuction(request.params.id, user.role);
-    const auction = await updateAuction(request.params.id, user.id, user.role, body);
+    const before = await getAuction(request.params.id, user.roles);
+    const auction = await updateAuction(request.params.id, user.id, user.roles, body);
     await writeAuditLog({
       actorId: user.id,
       action: "auction.update",
@@ -114,7 +115,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const user = request.user;
       if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
-      const auction = await publishAuction(request.params.id, user.id, user.role, app.emailQueue);
+      const auction = await publishAuction(request.params.id, user.id, user.roles, app.emailQueue);
       await writeAuditLog({
         actorId: user.id,
         action: "auction.publish",
@@ -133,7 +134,9 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const user = request.user;
       if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
-      const auction = await cancelAuction(request.params.id, user.id, user.role);
+      
+      const auction = await cancelAuction(request.params.id, user.id, user.roles);
+
       await writeAuditLog({
         actorId: user.id,
         action: "auction.cancel",
@@ -142,6 +145,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
         after: auction,
         ...requestMeta(request),
       });
+
       return { auction };
     },
   );
@@ -154,7 +158,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
       const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
       if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
-      if (auction.sellerId !== user.id && user.role !== "ADMIN") {
+      if (auction.sellerId !== user.id && !hasRole(user.roles, Role.ADMIN)) {
         throw new AppError(403, "FORBIDDEN", "Not auction owner");
       }
 
@@ -289,27 +293,6 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get<{ Params: { id: string } }>(
-    "/auctions/:id/proxy-bid",
-    { preHandler: [requireUuidParam(), requireBuyer] },
-    async (request) => {
-      const user = request.user;
-      if (!user) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
-      const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
-      if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
-      const proxy = await prisma.proxyBid.findUnique({
-        where: {
-          auctionId_bidderId: { auctionId: request.params.id, bidderId: user.id },
-        },
-      });
-      return {
-        auctionId: request.params.id,
-        maxAmountCents: proxy?.maxAmount ?? null,
-        updatedAt: proxy?.updatedAt.toISOString() ?? null,
-      };
-    },
-  );
-
-  app.get<{ Params: { id: string } }>(
     "/auctions/:id/snapshot",
     { preHandler: [requireUuidParam(), optionalAuth] },
     async (request) => {
@@ -334,6 +317,9 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
         bidderId: b.bidderId,
         amount: b.amount,
         isProxy: b.isProxy,
+        sequenceNo: b.sequenceNo,
+        elapsedSecFromStart: b.elapsedSecFromStart,
+        remainingSecAtBid: b.remainingSecAtBid,
         createdAt: b.createdAt.toISOString(),
       })),
     };
@@ -395,8 +381,8 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
     return listAuctions({
       page: 1,
       pageSize: 50,
-      viewerRole: user.role,
-      sellerId: user.role === "ADMIN" ? undefined : user.id,
+      viewerRoles: user.roles,
+      sellerId: hasRole(user.roles, Role.ADMIN) ? undefined : user.id,
     });
   });
 
@@ -409,7 +395,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       const auction = await acceptHighBid({
         auctionId: request.params.id,
         actorId: user.id,
-        actorRole: user.role,
+        actorRoles: user.roles,
         eventBus: app.eventBus,
         emailQueue: app.emailQueue,
       });
@@ -427,7 +413,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       const auction = await proposeCounterOffer({
         auctionId: request.params.id,
         actorId: user.id,
-        actorRole: user.role,
+        actorRoles: user.roles,
         amountCents: body.amountCents,
         eventBus: app.eventBus,
       });
@@ -444,7 +430,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       const auction = await acceptCounterOffer({
         auctionId: request.params.id,
         actorId: user.id,
-        actorRole: user.role,
+        actorRoles: user.roles,
         eventBus: app.eventBus,
         emailQueue: app.emailQueue,
       });
@@ -461,7 +447,7 @@ export async function auctionRoutes(app: FastifyInstance): Promise<void> {
       const auction = await declineNegotiation({
         auctionId: request.params.id,
         actorId: user.id,
-        actorRole: user.role,
+        actorRoles: user.roles,
         eventBus: app.eventBus,
       });
       return { auction };

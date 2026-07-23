@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import type { AuctionDto } from "@auction/shared";
+import { io, type Socket } from "socket.io-client";
+import {
+  RealtimeEvent,
+  type AuctionDto,
+  type AuctionExtendedPayload,
+  type BidPlacedPayload,
+} from "@auction/shared";
 import { API_URL, apiFetch } from "@/lib/api";
 import { useT, useLocale, localeToBcp47 } from "@/lib/i18n";
 import { useFormatApiError } from "@/lib/use-format-api-error";
@@ -12,7 +18,8 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 
 type FilterStatus = "LIVE" | "SCHEDULED" | "NEGOTIATING" | "all";
 
-const POLL_MS = 12_000;
+/** Fallback full refresh when sockets miss an event */
+const POLL_MS = 30_000;
 
 export function AuctionList() {
   const t = useT();
@@ -22,6 +29,8 @@ export function AuctionList() {
   const [items, setItems] = useState<AuctionDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const socketRef = useRef<Socket | null>(null);
+  const joinedRef = useRef<Set<string>>(new Set());
 
   const filters: Array<{ id: FilterStatus; label: string }> = [
     { id: "LIVE", label: t("auctions.filterLive") },
@@ -52,6 +61,76 @@ export function AuctionList() {
     const id = window.setInterval(() => load(filter), POLL_MS);
     return () => window.clearInterval(id);
   }, [filter, load]);
+
+  // Live card updates via Socket.IO auction rooms
+  useEffect(() => {
+    const socket: Socket = io(API_URL, {
+      withCredentials: true,
+      transports: ["websocket", "polling"],
+    });
+    socketRef.current = socket;
+
+    const applyBid = (payload: BidPlacedPayload): void => {
+      setItems((prev) =>
+        prev.map((a) =>
+          a.id === payload.auctionId
+            ? {
+                ...a,
+                currentBid: payload.currentBidCents,
+                currentWinnerId: payload.currentWinnerId,
+                endsAt: payload.endsAt,
+              }
+            : a,
+        ),
+      );
+    };
+
+    const applyExtended = (payload: AuctionExtendedPayload): void => {
+      setItems((prev) =>
+        prev.map((a) => (a.id === payload.auctionId ? { ...a, endsAt: payload.endsAt } : a)),
+      );
+    };
+
+    // After reconnect, server rooms are lost — re-emit joins for tracked ids.
+    socket.on("connect", () => {
+      for (const id of joinedRef.current) {
+        socket.emit("auction:join", id);
+      }
+    });
+    socket.on(RealtimeEvent.BID_PLACED, applyBid);
+    socket.on(RealtimeEvent.AUCTION_EXTENDED, applyExtended);
+
+    return () => {
+      for (const id of joinedRef.current) {
+        socket.emit("auction:leave", id);
+      }
+      joinedRef.current.clear();
+      socket.off(RealtimeEvent.BID_PLACED, applyBid);
+      socket.off(RealtimeEvent.AUCTION_EXTENDED, applyExtended);
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+
+    const nextIds = items.map((a) => a.id);
+    const next = new Set(nextIds);
+    for (const id of joinedRef.current) {
+      if (!next.has(id)) {
+        socket.emit("auction:leave", id);
+        joinedRef.current.delete(id);
+      }
+    }
+    for (const id of nextIds) {
+      if (!joinedRef.current.has(id)) {
+        socket.emit("auction:join", id);
+        joinedRef.current.add(id);
+      }
+    }
+  }, [items]);
 
   return (
     <div>

@@ -1,14 +1,22 @@
 import type { FastifyRequest } from "fastify";
 import { prisma } from "@auction/db";
-import { Role, UserStatus, type Role as RoleType } from "@auction/shared";
+import {
+  Role,
+  UserStatus,
+  hasAnyRole,
+  rolesEqual,
+  sortRoles,
+  type Role as RoleType,
+} from "@auction/shared";
 import { AppError } from "../lib/errors.js";
 import { ACCESS_COOKIE, verifyAccessToken } from "../lib/auth-tokens.js";
+import { loadUserRoles } from "../lib/user-roles.js";
 
 export type AuthUser = {
   id: string;
   email: string;
   displayName: string;
-  role: RoleType;
+  roles: RoleType[];
   status: typeof UserStatus.ACTIVE | typeof UserStatus.SUSPENDED;
 };
 
@@ -30,19 +38,20 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
   if (!user || user.status !== UserStatus.ACTIVE) {
     throw new AppError(401, "UNAUTHORIZED", "User inactive or not found");
   }
-  if (user.role !== payload.role) {
+  const roles = await loadUserRoles(user.id);
+  if (roles.length === 0 || !rolesEqual(roles, payload.roles)) {
     throw new AppError(401, "UNAUTHORIZED", "Token role mismatch");
   }
   request.user = {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
-    role: user.role,
+    roles: sortRoles(roles),
     status: user.status,
   };
 }
 
-/** Strict RBAC: user must have one of the required roles. */
+/** Strict RBAC: user must have at least one of the required roles. */
 export function requireRole(...roles: readonly RoleType[]) {
   return async (request: FastifyRequest): Promise<void> => {
     await requireAuth(request);
@@ -50,7 +59,7 @@ export function requireRole(...roles: readonly RoleType[]) {
     if (!user) {
       throw new AppError(401, "UNAUTHORIZED", "Authentication required");
     }
-    if (!roles.includes(user.role)) {
+    if (!hasAnyRole(user.roles, ...roles)) {
       throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
     }
   };

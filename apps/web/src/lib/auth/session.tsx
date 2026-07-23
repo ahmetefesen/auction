@@ -10,14 +10,14 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname } from "next/navigation";
-import type { Role, WalletDto } from "@auction/shared";
+import { hasAnyRole, hasRole, type Role, type WalletDto } from "@auction/shared";
 import { apiFetch } from "@/lib/api";
 
 export type SessionUser = {
   id: string;
   email: string;
   displayName: string;
-  role: Role;
+  roles: Role[];
   status: string;
 };
 
@@ -82,19 +82,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [pathname]);
 
-  const value = useMemo<SessionState>(
-    () => ({
+  const value = useMemo<SessionState>(() => {
+    const roles = user?.roles ?? [];
+    return {
       user,
       wallet,
       loaded,
       refresh,
       clear,
-      isBuyer: user?.role === "BUYER",
-      isSeller: user?.role === "SELLER" || user?.role === "ADMIN",
-      isAdmin: user?.role === "ADMIN",
-    }),
-    [user, wallet, loaded, refresh, clear],
-  );
+      isBuyer: hasRole(roles, "BUYER"),
+      isSeller: hasAnyRole(roles, "SELLER", "ADMIN"),
+      isAdmin: hasRole(roles, "ADMIN"),
+    };
+  }, [user, wallet, loaded, refresh, clear]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

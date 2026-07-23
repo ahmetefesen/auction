@@ -5,7 +5,8 @@ export type PublicUser = {
   id: string;
   email: string;
   displayName: string;
-  role: Role;
+  /** All roles assigned to this user (BUYER + SELLER allowed). */
+  roles: Role[];
   status: UserStatus;
   createdAt: string;
 };
@@ -49,6 +50,9 @@ export type BidDto = {
   bidderId: string;
   amount: number;
   isProxy: boolean;
+  sequenceNo: number;
+  elapsedSecFromStart: number;
+  remainingSecAtBid: number;
   createdAt: string;
 };
 

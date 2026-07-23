@@ -64,7 +64,7 @@ sequenceDiagram
 3. **Serializable transaction + pessimistic locks** — lock auction row, proxy bids for the lot, then wallets in sorted `userId` order (deadlock avoidance).
 4. **Domain logic** — classic proxy resolution; if within anti-snipe window, extend `endsAt` in the same transaction.
 5. **Escrow** — release previous winner hold (if any), hold for new visible winning amount.
-6. **After commit** — publish to Redis EventBus; Socket.IO emits to the auction room (and wallet updates to user rooms).
+6. **After commit** — publish to Redis EventBus only; each API process subscriber emits once to Socket.IO rooms (`auction:{id}`, and for bids also `seller:{sellerId}`; wallet updates go to `user:{id}`). Local `emitLocal` is not called from `publish` (avoids double delivery).
 
 Concurrency safety comes from **row locks inside one DB transaction**, not from Redis locks or optimistic-only `version` checks on the bid path (`version` still increments for observers).
 

@@ -4,6 +4,7 @@ import {
   RealtimeEvent,
   auctionRoom,
   userRoom,
+  sellerRoom,
   bidPlacedPayloadSchema,
   auctionExtendedPayloadSchema,
   auctionEndedPayloadSchema,
@@ -41,9 +42,10 @@ export class EventBus {
     event: DomainPayload["event"],
     data: DomainPayload["data"],
   ): Promise<void> {
+    // Redis-only fan-out: every API process (including publisher) emits once via subscriber.
+    // Do not call emitLocal here — that caused double delivery to Socket.IO rooms.
     const envelope = { event, data };
     await this.redis.publish(CHANNEL, JSON.stringify(envelope));
-    this.emitLocal(event, data);
   }
 
   startSubscriber(subscriber: Redis): void {
@@ -76,6 +78,7 @@ export class EventBus {
         const payload = bidPlacedPayloadSchema.safeParse(data);
         if (!payload.success) return;
         this.io.to(auctionRoom(payload.data.auctionId)).emit(event, payload.data);
+        this.io.to(sellerRoom(payload.data.sellerId)).emit(event, payload.data);
         return;
       }
       case RealtimeEvent.AUCTION_EXTENDED: {

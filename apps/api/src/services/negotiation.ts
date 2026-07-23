@@ -1,11 +1,12 @@
 import { prisma, AuctionStatus, lockAuctionById, lockWalletsByUserIds, Prisma } from "@auction/db";
-import { RealtimeEvent, type AuctionDto, Role as SharedRole } from "@auction/shared";
-import type { Role } from "@auction/db";
+import { RealtimeEvent, type AuctionDto, Role as SharedRole, hasRole, type Role } from "@auction/shared";
+import { AuctionEventType } from "@auction/db";
 import { AppError } from "../lib/errors.js";
 import { walletService } from "./wallet.js";
 import type { EventBus } from "../realtime/event-bus.js";
 import type { EmailQueue } from "../queues/email.js";
 import { toDto } from "./auction.js";
+import { recordAuctionEvent } from "./auction-events.js";
 
 const SERIALIZABLE = {
   isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -74,6 +75,14 @@ async function settleNegotiatingAtAmount(
     },
   });
 
+  await recordAuctionEvent(tx, {
+    auctionId: auction.id,
+    type: AuctionEventType.SETTLED,
+    actorUserId: auction.currentWinnerId,
+    payload: { amountCents: amount, via: "negotiation" },
+    startsAt: auction.startsAt,
+  });
+
   return {
     auction: settled,
     winnerId: auction.currentWinnerId,
@@ -114,7 +123,7 @@ async function publishSettled(
 export async function acceptHighBid(input: {
   auctionId: string;
   actorId: string;
-  actorRole: Role;
+  actorRoles: readonly Role[];
   eventBus: EventBus;
   emailQueue: EmailQueue;
 }): Promise<AuctionDto> {
@@ -124,21 +133,21 @@ export async function acceptHighBid(input: {
     if (auction.status !== AuctionStatus.NEGOTIATING) {
       throw new AppError(400, "NOT_NEGOTIATING", "Auction is not in negotiation");
     }
-    if (auction.sellerId !== input.actorId && input.actorRole !== SharedRole.ADMIN) {
+    if (auction.sellerId !== input.actorId && !hasRole(input.actorRoles, SharedRole.ADMIN)) {
       throw new AppError(403, "FORBIDDEN", "Only the seller can accept the high bid");
     }
     return settleNegotiatingAtAmount(tx, input.auctionId, auction.currentBid);
   }, SERIALIZABLE);
 
   await publishSettled(input.eventBus, input.emailQueue, result);
-  return toDto(result.auction, input.actorRole);
+  return toDto(result.auction, input.actorRoles);
 }
 
 /** Seller proposes a counter-offer (≥ current bid). */
 export async function proposeCounterOffer(input: {
   auctionId: string;
   actorId: string;
-  actorRole: Role;
+  actorRoles: readonly Role[];
   amountCents: number;
   eventBus: EventBus;
 }): Promise<AuctionDto> {
@@ -148,7 +157,7 @@ export async function proposeCounterOffer(input: {
     if (auction.status !== AuctionStatus.NEGOTIATING) {
       throw new AppError(400, "NOT_NEGOTIATING", "Auction is not in negotiation");
     }
-    if (auction.sellerId !== input.actorId && input.actorRole !== SharedRole.ADMIN) {
+    if (auction.sellerId !== input.actorId && !hasRole(input.actorRoles, SharedRole.ADMIN)) {
       throw new AppError(403, "FORBIDDEN", "Only the seller can counter");
     }
     if (input.amountCents < auction.currentBid) {
@@ -172,14 +181,14 @@ export async function proposeCounterOffer(input: {
     counterOfferCents: updated.counterOfferCents,
   });
 
-  return toDto(updated, input.actorRole);
+  return toDto(updated, input.actorRoles);
 }
 
 /** High bidder accepts the seller counter-offer. */
 export async function acceptCounterOffer(input: {
   auctionId: string;
   actorId: string;
-  actorRole: Role;
+  actorRoles: readonly Role[];
   eventBus: EventBus;
   emailQueue: EmailQueue;
 }): Promise<AuctionDto> {
@@ -192,21 +201,21 @@ export async function acceptCounterOffer(input: {
     if (!auction.counterOfferCents) {
       throw new AppError(400, "NO_COUNTER", "No counter-offer to accept");
     }
-    if (auction.currentWinnerId !== input.actorId && input.actorRole !== SharedRole.ADMIN) {
+    if (auction.currentWinnerId !== input.actorId && !hasRole(input.actorRoles, SharedRole.ADMIN)) {
       throw new AppError(403, "FORBIDDEN", "Only the high bidder can accept the counter");
     }
     return settleNegotiatingAtAmount(tx, input.auctionId, auction.counterOfferCents);
   }, SERIALIZABLE);
 
   await publishSettled(input.eventBus, input.emailQueue, result);
-  return toDto(result.auction, input.actorRole);
+  return toDto(result.auction, input.actorRoles);
 }
 
 /** Either party declines — release hold and end. */
 export async function declineNegotiation(input: {
   auctionId: string;
   actorId: string;
-  actorRole: Role;
+  actorRoles: readonly Role[];
   eventBus: EventBus;
 }): Promise<AuctionDto> {
   const ended = await prisma.$transaction(async (tx) => {
@@ -218,7 +227,7 @@ export async function declineNegotiation(input: {
     const isParty =
       auction.sellerId === input.actorId ||
       auction.currentWinnerId === input.actorId ||
-      input.actorRole === SharedRole.ADMIN;
+      hasRole(input.actorRoles, SharedRole.ADMIN);
     if (!isParty) {
       throw new AppError(403, "FORBIDDEN", "Not a negotiation party");
     }
@@ -251,7 +260,7 @@ export async function declineNegotiation(input: {
     finalBidCents: ended.currentBid,
   });
 
-  return toDto(ended, input.actorRole);
+  return toDto(ended, input.actorRoles);
 }
 
 /** Closer tick: expire negotiation windows past deadline. */

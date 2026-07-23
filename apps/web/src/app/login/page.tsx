@@ -10,7 +10,7 @@ import { useFormatApiError } from "@/lib/use-format-api-error";
 type AuthUser = {
   id: string;
   displayName: string;
-  role: "BUYER" | "SELLER" | "ADMIN";
+  roles: Array<"BUYER" | "SELLER" | "ADMIN">;
 };
 
 export default function LoginPage() {
@@ -38,8 +38,9 @@ export default function LoginPage() {
             name: res.user.displayName,
           }),
         );
+        const roles = res.user.roles ?? [];
         const dest =
-          res.user.role === "SELLER" || res.user.role === "ADMIN" ? "/seller" : "/auctions";
+          roles.includes("SELLER") || roles.includes("ADMIN") ? "/seller" : "/auctions";
         router.push(dest);
         router.refresh();
       } catch (err) {

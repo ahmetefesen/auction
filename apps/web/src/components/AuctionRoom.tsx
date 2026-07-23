@@ -381,7 +381,7 @@ export function AuctionRoom({
                 <p>{t("room.noCounter")}</p>
               )}
 
-              {isSellerHere || user?.role === "ADMIN" ? (
+              {isSellerHere || user?.roles?.includes("ADMIN") ? (
                 <div className="space-y-2">
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -459,7 +459,7 @@ export function AuctionRoom({
                     {t("room.loginLink")}
                   </Link>
                 </p>
-              ) : !isSellerHere && !isHighBidder && user.role !== "ADMIN" ? (
+              ) : !isSellerHere && !isHighBidder && !user.roles.includes("ADMIN") ? (
                 <p className="text-mist-300">{t("room.negotiationSpectator")}</p>
               ) : null}
             </div>

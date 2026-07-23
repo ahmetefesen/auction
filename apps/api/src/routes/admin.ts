@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma, AuctionStatus } from "@auction/db";
 import { forceEndAuctionSchema, updateUserStatusSchema, auditLogListQuerySchema } from "@auction/shared";
+import { hasRole, Role } from "@auction/shared";
 import { AppError } from "../lib/errors.js";
 import { requireAdmin, requireSeller } from "../plugins/auth.js";
 import { requireUuidParam } from "../plugins/validate-params.js";
@@ -87,14 +88,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         id: true,
         email: true,
         displayName: true,
-        role: true,
         status: true,
         createdAt: true,
+        roles: { select: { role: true } },
       },
     });
     return {
       users: users.map((u) => ({
-        ...u,
+        id: u.id,
+        email: u.email,
+        displayName: u.displayName,
+        roles: u.roles.map((r) => r.role),
+        status: u.status,
         createdAt: u.createdAt.toISOString(),
       })),
     };
@@ -131,12 +136,16 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         return updated;
       });
 
+      const roles = await prisma.userRole.findMany({
+        where: { userId: after.id },
+        select: { role: true },
+      });
       return {
         user: {
           id: after.id,
           email: after.email,
           displayName: after.displayName,
-          role: after.role,
+          roles: roles.map((r) => r.role),
           status: after.status,
           createdAt: after.createdAt.toISOString(),
         },
@@ -187,7 +196,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       const body = forceEndAuctionSchema.parse(request.body);
       const meta = requestMeta(request);
 
-      const auction = await cancelAuction(request.params.id, admin.id, admin.role);
+      const auction = await cancelAuction(request.params.id, admin.id, admin.roles);
 
       await prisma.$transaction(async (tx) => {
         await writeAuditLogTx(tx, {
@@ -216,7 +225,7 @@ export async function sellerInsightRoutes(app: FastifyInstance): Promise<void> {
 
       const auction = await prisma.auction.findUnique({ where: { id: request.params.id } });
       if (!auction) throw new AppError(404, "AUCTION_NOT_FOUND", "Auction not found");
-      if (auction.sellerId !== user.id && user.role !== "ADMIN") {
+      if (auction.sellerId !== user.id && !hasRole(user.roles, Role.ADMIN)) {
         throw new AppError(403, "FORBIDDEN", "Not auction owner");
       }
       if (auction.status !== AuctionStatus.SETTLED || !auction.currentWinnerId) {

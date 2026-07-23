@@ -33,7 +33,7 @@ type UserItem = {
   id: string;
   email: string;
   displayName: string;
-  role: string;
+  roles: string[];
   status: string;
 };
 
@@ -272,7 +272,7 @@ export default function AdminPage() {
         {users.map((u) => (
           <li key={u.id} className="flex items-center justify-between border-b border-white/10 py-2 text-sm">
             <span>
-              {u.displayName} · {u.email} · {u.role} · {u.status}
+              {u.displayName} · {u.email} · {(u.roles ?? []).join(", ")} · {u.status}
             </span>
             <button
               type="button"

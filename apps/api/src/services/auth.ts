@@ -1,6 +1,5 @@
 import type { FastifyReply } from "fastify";
-import type { Role } from "@auction/shared";
-import { UserStatus } from "@auction/shared";
+import { UserStatus, type Role, type PublicUser } from "@auction/shared";
 import { prisma } from "@auction/db";
 import type { Env } from "../config/env.js";
 import { AppError } from "../lib/errors.js";
@@ -18,6 +17,7 @@ import {
   parseAccessTtlSeconds,
   parseRefreshTtlSeconds,
 } from "../lib/auth-tokens.js";
+import { loadUserRoles, toPublicUser } from "../lib/user-roles.js";
 
 function cookieOpts(secure: boolean, maxAgeSec: number) {
   return {
@@ -29,14 +29,7 @@ function cookieOpts(secure: boolean, maxAgeSec: number) {
   };
 }
 
-export type SessionUser = {
-  id: string;
-  email: string;
-  displayName: string;
-  role: Role;
-  status: string;
-  createdAt: Date;
-};
+export type SessionUser = PublicUser;
 
 /**
  * Auth Service — Argon2id passwords, JWT access + refresh in httpOnly cookies.
@@ -55,9 +48,9 @@ export class AuthService {
   /** Issue access + refresh JWTs, persist refresh hash, set httpOnly cookies. */
   async establishSession(
     reply: FastifyReply,
-    user: { id: string; role: Role },
+    user: { id: string; roles: readonly Role[] },
   ): Promise<void> {
-    const access = await signAccessToken(this.env, user.id, user.role);
+    const access = await signAccessToken(this.env, user.id, user.roles);
     const rawRefresh = generateRefreshToken();
     const tokenHash = hashToken(rawRefresh);
     const refreshJwt = await signRefreshJwt(this.env, user.id, tokenHash);
@@ -90,7 +83,10 @@ export class AuthService {
       throw new AppError(401, "UNAUTHORIZED", "Refresh token revoked or expired");
     }
 
-    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: { roles: true },
+    });
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new AppError(401, "UNAUTHORIZED", "User inactive");
     }
@@ -100,8 +96,9 @@ export class AuthService {
       data: { revokedAt: new Date() },
     });
 
-    await this.establishSession(reply, { id: user.id, role: user.role });
-    return user;
+    const roles = await loadUserRoles(user.id);
+    await this.establishSession(reply, { id: user.id, roles });
+    return toPublicUser(user);
   }
 
   async clearSession(reply: FastifyReply, refreshCookie: string | undefined): Promise<void> {

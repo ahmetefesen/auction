@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app.js";
 import { resetEnvCache, loadEnv, type Env } from "../config/env.js";
 import { ACCESS_COOKIE, hashPassword, signAccessToken } from "../lib/auth-tokens.js";
+import { assignRolesAndProfiles } from "../lib/user-roles.js";
 import type { EventBus } from "../realtime/event-bus.js";
 import type { EmailQueue } from "../queues/email.js";
 import { assertTestInfra, createTestRedis, withTimeout } from "./infra.js";
@@ -74,6 +75,7 @@ export async function resetDatabase(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
       "BidIdempotency",
+      "AuctionEvent",
       "Bid",
       "ProxyBid",
       "Watchlist",
@@ -83,52 +85,60 @@ export async function resetDatabase(): Promise<void> {
       "Wallet",
       "RefreshToken",
       "AuditLog",
+      "UserRole",
+      "SellerProfile",
+      "BuyerProfile",
+      "AdminProfile",
       "User"
     RESTART IDENTITY CASCADE
   `);
 }
 
-export async function seedTestUsers(): Promise<TestUsers> {
+async function createUserWithRoles(input: {
+  email: string;
+  displayName: string;
+  roles: Array<"ADMIN" | "SELLER" | "BUYER">;
+  availableBalance?: number;
+}): Promise<User> {
   const passwordHash = await hashPassword("Password123!");
-
-  const seller = await prisma.user.create({
+  const user = await prisma.user.create({
     data: {
-      email: `seller-${randomUUID()}@test.local`,
+      email: input.email,
       passwordHash,
-      displayName: "Test Seller",
-      role: Role.SELLER,
-      wallet: { create: {} },
-    },
-  });
-
-  const buyer1 = await prisma.user.create({
-    data: {
-      email: `buyer1-${randomUUID()}@test.local`,
-      passwordHash,
-      displayName: "Test Buyer 1",
-      role: Role.BUYER,
+      displayName: input.displayName,
       wallet: {
         create: {
-          availableBalance: 500_000,
+          availableBalance: input.availableBalance ?? 0,
           heldBalance: 0,
         },
       },
     },
   });
+  await assignRolesAndProfiles(user.id, input.roles);
+  return user;
+}
 
-  const buyer2 = await prisma.user.create({
-    data: {
-      email: `buyer2-${randomUUID()}@test.local`,
-      passwordHash,
-      displayName: "Test Buyer 2",
-      role: Role.BUYER,
-      wallet: {
-        create: {
-          availableBalance: 500_000,
-          heldBalance: 0,
-        },
-      },
-    },
+export async function seedTestUsers(): Promise<TestUsers> {
+  const seller = await createUserWithRoles({
+    email: `seller-${randomUUID()}@test.local`,
+    displayName: "Test Seller",
+    // Seller can also buy on other lots
+    roles: [Role.SELLER, Role.BUYER],
+    availableBalance: 0,
+  });
+
+  const buyer1 = await createUserWithRoles({
+    email: `buyer1-${randomUUID()}@test.local`,
+    displayName: "Test Buyer 1",
+    roles: [Role.BUYER],
+    availableBalance: 500_000,
+  });
+
+  const buyer2 = await createUserWithRoles({
+    email: `buyer2-${randomUUID()}@test.local`,
+    displayName: "Test Buyer 2",
+    roles: [Role.BUYER],
+    availableBalance: 500_000,
   });
 
   return { seller, buyer1, buyer2 };
@@ -165,35 +175,30 @@ export async function createLiveAuction(
 }
 
 export async function buyerAuthCookie(env: Env, userId: string): Promise<string> {
-  const token = await signAccessToken(env, userId, Role.BUYER);
+  const token = await signAccessToken(env, userId, [Role.BUYER]);
   return `${ACCESS_COOKIE}=${token}`;
 }
 
 export async function buyerAuthCookies(env: Env, userId: string): Promise<Record<string, string>> {
-  const token = await signAccessToken(env, userId, Role.BUYER);
+  const token = await signAccessToken(env, userId, [Role.BUYER]);
   return { [ACCESS_COOKIE]: token };
 }
 
 export async function sellerAuthCookies(env: Env, userId: string): Promise<Record<string, string>> {
-  const token = await signAccessToken(env, userId, Role.SELLER);
+  const token = await signAccessToken(env, userId, [Role.SELLER, Role.BUYER]);
   return { [ACCESS_COOKIE]: token };
 }
 
 export async function adminAuthCookies(env: Env, userId: string): Promise<Record<string, string>> {
-  const token = await signAccessToken(env, userId, Role.ADMIN);
+  const token = await signAccessToken(env, userId, [Role.ADMIN]);
   return { [ACCESS_COOKIE]: token };
 }
 
 export async function seedAdminUser(): Promise<User> {
-  const passwordHash = await hashPassword("Password123!");
-  return prisma.user.create({
-    data: {
-      email: `admin-${randomUUID()}@test.local`,
-      passwordHash,
-      displayName: "Test Admin",
-      role: Role.ADMIN,
-      wallet: { create: {} },
-    },
+  return createUserWithRoles({
+    email: `admin-${randomUUID()}@test.local`,
+    displayName: "Test Admin",
+    roles: [Role.ADMIN],
   });
 }
 
